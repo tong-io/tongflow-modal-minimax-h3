@@ -130,9 +130,17 @@ changing `H3_*` env vars in Settings, force a re-deploy by clearing the cache
 entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 `modal deploy deploy.py` manually with the new env exported.
 
+## Measured performance (2026-08-03, B200, nvfp4 TE, defaults)
+
+- **5 s clip @ 768p 16:9: 4 min 17 s steady-state** (≈ $0.45/clip at $6.25/h).
+  Output quality verified comparable to Seedance 2.0.
+- 15 s extrapolates to roughly 12–15 min (full attention scales superlinearly;
+  not yet measured — see runbook step 4).
+- For faster drafts lower `H3_SHORT_EDGE` (e.g. 512) — generation time scales
+  roughly with pixel count.
+
 ## Known gaps / notes
 
-- No public speed benchmarks existed at build time; step 3 decides viability.
 - The Ref2VA graph wires references via ComfyUI autogrow inputs
   (`ref_images.ref_image_0` …) — validated against the v0.30.0 template
   serialization, but the first live run is the real test (a rejection error
