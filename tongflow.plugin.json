@@ -1,0 +1,50 @@
+{
+    "plugin": {
+        "name": "MiniMax-H3",
+        "description": "Self-hosted MiniMax-H3 33B video generation with native stereo audio (text / first+last frame / multi-image / omni-reference) via headless ComfyUI.",
+        "icon": "/plugins/tongflow-modal-minimax-h3.svg"
+    },
+    "env": [
+        {
+            "key": "MODAL_TOKEN_ID",
+            "required": true,
+            "description": "Modal token id",
+            "url": "https://modal.com/settings/tokens"
+        },
+        {
+            "key": "MODAL_TOKEN_SECRET",
+            "required": true,
+            "description": "Modal token secret (paired with MODAL_TOKEN_ID)"
+        },
+        {
+            "key": "HF_TOKEN",
+            "description": "Hugging Face token (Comfy-Org/MiniMax-H3 is public; only needed if it becomes gated)",
+            "url": "https://huggingface.co/settings/tokens"
+        },
+        {
+            "key": "TONGFLOW_MODAL_CALL_TIMEOUT_S",
+            "default": "3600",
+            "description": "Max seconds to wait for a Modal call"
+        },
+        {
+            "key": "H3_GPU",
+            "default": "B200",
+            "description": "Modal GPU type. B200 (192 GB) keeps both checkpoints resident; on H100/A100 also set H3_TEXT_ENCODER_VARIANT=int8"
+        },
+        {
+            "key": "H3_TEXT_ENCODER_VARIANT",
+            "default": "nvfp4",
+            "description": "Text encoder quantization: nvfp4 (Blackwell-native, 15.7 GB) or int8 (27.1 GB, for pre-Blackwell GPUs)"
+        },
+        {
+            "key": "H3_SHORT_EDGE",
+            "default": "768",
+            "description": "Output canvas short edge in pixels (model native 768). Lower for faster, cheaper drafts"
+        },
+        {
+            "key": "H3_STEPS",
+            "default": "20",
+            "description": "Sampling steps (official template default 20)"
+        }
+    ]
+}
