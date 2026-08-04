@@ -50,15 +50,20 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `vae/minimax_h3_video_vae_fp16.safetensors` | 5.2 GB |
 | `vae/minimax_h3_audio_vae_fp32.safetensors` | 0.6 GB |
 
-Default GPU is **H100** ($3.95/h on Modal) with the int8 text encoder.
-**Duration drives the choice**: full attention scales superlinearly, so a
-15 s clip costs far more than 3× a 5 s clip. Measured/estimated per clip:
+Default GPU is **B200** ($6.25/h on Modal) with the NVFP4 text encoder —
+measured **both fastest and cheapest per clip** (Blackwell runs the
+int8-convrot/NVFP4 kernels ~2× faster than Hopper, more than offsetting the
+hourly rate). Measured / estimated per clip at native 768p:
 
 | GPU | 5 s clip | 10 s clip | 15 s clip | Notes |
 |---|---|---|---|---|
-| A100-80GB $2.50/h | ~8–10 min | >40 min (aborted) | ⚠️ times out | cheapest, **short clips only** |
-| **H100 $3.95/h (default)** | ~7 min | **20 min 25 s (measured, $1.34)** | ~35–40 min | balanced |
-| B200 $6.25/h + nvfp4 | **4 min 17 s (measured, $0.45)** | ~13 min | ~22–26 min | speed ceiling; both checkpoints resident |
+| **B200 $6.25/h (default)** | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | fastest AND cheapest; both checkpoints resident in 192 GB |
+| H100 $3.95/h + int8 TE | ~10 min | **20 m 25 s ($1.34) ✓** | ~35–40 min | quota fallback |
+| A100-80GB $2.50/h + int8 TE | ~15 min | >40 min (aborted) ✓ | ⚠️ times out | not recommended |
+
+(✓ = measured, 2026-08-03/04.) Full attention scales superlinearly with
+duration; MiniMax's unreleased sparse attention is the long-clip fix — we'll
+adopt it when it lands.
 
 One checkpoint + text encoder + VAEs fit in 80 GB; on A100/H100 switching
 between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
@@ -141,13 +146,14 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 ## Measured performance
 
-- **B200 + nvfp4 TE (2026-08-03): 5 s clip @ 768p 16:9 in 4 min 17 s**
-  steady-state (≈ $0.45/clip). Output quality verified comparable to
+- **B200 + nvfp4 TE: 5 s in 4 m 17 s ($0.45); 10 s in 10 m 04 s ($1.05)** —
+  fastest and cheapest per clip. Output quality verified comparable to
   Seedance 2.0.
-- **H100 + int8 TE (2026-08-04): 10 s clip in 20 min 25 s** (≈ $1.34/clip).
-- A100-80GB: a 15 s clip exceeded 40 min and was aborted — short clips only.
-- Full attention scales superlinearly with duration (10 s costs ~3× a 5 s
-  clip, not 2×); MiniMax's unreleased sparse attention is the long-clip fix.
+- H100 + int8 TE: 10 s in 20 m 25 s ($1.34) — ~2× slower than B200, costs
+  more per clip.
+- A100-80GB: a 15 s clip exceeded 40 min and was aborted — not recommended.
+- Full attention scales superlinearly with duration (10 s costs ~2.3× a 5 s
+  clip); MiniMax's unreleased sparse attention is the long-clip fix.
 - 15 s extrapolates to roughly 12–15 min (full attention scales superlinearly;
   not yet measured — see runbook step 4).
 - For faster drafts lower `H3_SHORT_EDGE` (e.g. 512) — generation time scales

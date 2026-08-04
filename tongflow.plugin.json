@@ -28,13 +28,13 @@
         },
         {
             "key": "H3_GPU",
-            "default": "H100",
-            "description": "Modal GPU type. H100 is the balanced default; A100-80GB is cheaper but only for short clips (<=8 s, 15 s risks timeout); B200 is the speed option (pair with H3_TEXT_ENCODER_VARIANT=nvfp4)"
+            "default": "B200",
+            "description": "Modal GPU type. B200 measured fastest and cheapest per clip; H100/A100-80GB are quota fallbacks (pair with H3_TEXT_ENCODER_VARIANT=int8; A100 for short clips only)"
         },
         {
             "key": "H3_TEXT_ENCODER_VARIANT",
-            "default": "int8",
-            "description": "Text encoder quantization: int8 (27.1 GB, works everywhere) or nvfp4 (15.7 GB, Blackwell/B200 only)"
+            "default": "nvfp4",
+            "description": "Text encoder quantization: nvfp4 (15.7 GB, Blackwell/B200 only) or int8 (27.1 GB, works everywhere)"
         },
         {
             "key": "H3_SHORT_EDGE",

@@ -30,7 +30,7 @@ _TE_FILES = {
     "nvfp4": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
     "int8": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
 }
-_TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "int8").strip().lower()
+_TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lower()
 _TE_FILE = _TE_FILES.get(_TE_VARIANT, _TE_FILES["int8"])
 
 # (repo_id, path-in-repo, comfyui-subdir, flat-dest-name)

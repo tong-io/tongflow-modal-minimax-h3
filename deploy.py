@@ -25,14 +25,13 @@ prompt rewriter) is not open source, so prompts are passed through verbatim;
 ``enhance_prompt`` is accepted and ignored.
 
 Env knobs (all optional, read at deploy time — re-deploy after changing):
-  H3_GPU                   default "H100" (balanced). Full attention scales
-                           superlinearly with duration: a 15 s clip on
-                           A100-80GB runs ~45-60 min and risks the 3600 s call
-                           timeout, so A100 only suits short clips (<=8 s).
-                           "B200" + nvfp4 is the speed ceiling (both
-                           checkpoints resident in 192 GB).
-  H3_TEXT_ENCODER_VARIANT  "int8" (default) or "nvfp4" (Blackwell-only, pair
-                           with H3_GPU=B200); must match download.py.
+  H3_GPU                   default "B200" — measured both fastest AND cheapest
+                           per clip (10 s: 10m04 / $1.05 vs H100 20m25 /
+                           $1.34). "H100"/"A100-80GB" are fallbacks for quota;
+                           pair them with H3_TEXT_ENCODER_VARIANT=int8, and
+                           note A100 suits short clips only (15 s times out).
+  H3_TEXT_ENCODER_VARIANT  "nvfp4" (default, Blackwell/B200 only) or "int8"
+                           (works everywhere); must match download.py.
   H3_SHORT_EDGE            canvas short edge, default 768 (model native).
                            Lower (e.g. 512) for faster, cheaper drafts.
   H3_STEPS                 sampling steps, default 20 (official template).
@@ -74,8 +73,8 @@ COMFY_LOG = "/tmp/comfy.log"
 # slots stay with the Seedance (bytedance) plugin.
 TONGFLOW_DEFAULT_SLOTS = ["refs-gen-video"]
 
-GPU = (os.environ.get("H3_GPU") or "H100").strip()
-TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "int8").strip().lower()
+GPU = (os.environ.get("H3_GPU") or "B200").strip()
+TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lower()
 SHORT_EDGE = int(os.environ.get("H3_SHORT_EDGE") or 768)
 STEPS = int(os.environ.get("H3_STEPS") or 20)
 
