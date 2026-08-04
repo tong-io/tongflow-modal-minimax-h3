@@ -54,11 +54,11 @@ Default GPU is **H100** ($3.95/h on Modal) with the int8 text encoder.
 **Duration drives the choice**: full attention scales superlinearly, so a
 15 s clip costs far more than 3× a 5 s clip. Measured/estimated per clip:
 
-| GPU | 5 s clip | 15 s clip | Notes |
-|---|---|---|---|
-| A100-80GB $2.50/h | ~8–10 min | ~45–60 min ⚠️ | cheapest, **short clips only** — 15 s risks the 3600 s call timeout |
-| **H100 $3.95/h (default)** | ~5–6 min | ~25–35 min | balanced |
-| B200 $6.25/h + nvfp4 | 4 min 17 s (measured) | ~20–26 min | speed ceiling; 192 GB keeps both checkpoints resident |
+| GPU | 5 s clip | 10 s clip | 15 s clip | Notes |
+|---|---|---|---|---|
+| A100-80GB $2.50/h | ~8–10 min | >40 min (aborted) | ⚠️ times out | cheapest, **short clips only** |
+| **H100 $3.95/h (default)** | ~7 min | **20 min 25 s (measured, $1.34)** | ~35–40 min | balanced |
+| B200 $6.25/h + nvfp4 | **4 min 17 s (measured, $0.45)** | ~13 min | ~22–26 min | speed ceiling; both checkpoints resident |
 
 One checkpoint + text encoder + VAEs fit in 80 GB; on A100/H100 switching
 between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
@@ -142,10 +142,12 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 ## Measured performance
 
 - **B200 + nvfp4 TE (2026-08-03): 5 s clip @ 768p 16:9 in 4 min 17 s**
-  steady-state (≈ $0.45/clip at $6.25/h). Output quality verified comparable
-  to Seedance 2.0.
-- A100-80GB (current default): not yet timed — expected ~7–10 min per 5 s
-  clip (≈ $0.29–0.42).
+  steady-state (≈ $0.45/clip). Output quality verified comparable to
+  Seedance 2.0.
+- **H100 + int8 TE (2026-08-04): 10 s clip in 20 min 25 s** (≈ $1.34/clip).
+- A100-80GB: a 15 s clip exceeded 40 min and was aborted — short clips only.
+- Full attention scales superlinearly with duration (10 s costs ~3× a 5 s
+  clip, not 2×); MiniMax's unreleased sparse attention is the long-clip fix.
 - 15 s extrapolates to roughly 12–15 min (full attention scales superlinearly;
   not yet measured — see runbook step 4).
 - For faster drafts lower `H3_SHORT_EDGE` (e.g. 512) — generation time scales
