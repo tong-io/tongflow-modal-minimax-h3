@@ -25,11 +25,12 @@ prompt rewriter) is not open source, so prompts are passed through verbatim;
 ``enhance_prompt`` is accepted and ignored.
 
 Env knobs (all optional, read at deploy time — re-deploy after changing):
-  H3_GPU                   default "A100-80GB" (best measured cost per clip;
-                           the workload does not saturate bigger GPUs).
-                           "H100" is ~faster at ~1.6x the rate; "B200" is the
-                           speed option (192 GB keeps both checkpoints + the
-                           NVFP4 text encoder resident).
+  H3_GPU                   default "H100" (balanced). Full attention scales
+                           superlinearly with duration: a 15 s clip on
+                           A100-80GB runs ~45-60 min and risks the 3600 s call
+                           timeout, so A100 only suits short clips (<=8 s).
+                           "B200" + nvfp4 is the speed ceiling (both
+                           checkpoints resident in 192 GB).
   H3_TEXT_ENCODER_VARIANT  "int8" (default) or "nvfp4" (Blackwell-only, pair
                            with H3_GPU=B200); must match download.py.
   H3_SHORT_EDGE            canvas short edge, default 768 (model native).
@@ -73,7 +74,7 @@ COMFY_LOG = "/tmp/comfy.log"
 # slots stay with the Seedance (bytedance) plugin.
 TONGFLOW_DEFAULT_SLOTS = ["refs-gen-video"]
 
-GPU = (os.environ.get("H3_GPU") or "A100-80GB").strip()
+GPU = (os.environ.get("H3_GPU") or "H100").strip()
 TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "int8").strip().lower()
 SHORT_EDGE = int(os.environ.get("H3_SHORT_EDGE") or 768)
 STEPS = int(os.environ.get("H3_STEPS") or 20)

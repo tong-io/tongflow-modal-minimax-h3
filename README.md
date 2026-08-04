@@ -50,16 +50,20 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `vae/minimax_h3_video_vae_fp16.safetensors` | 5.2 GB |
 | `vae/minimax_h3_audio_vae_fp32.safetensors` | 0.6 GB |
 
-Default GPU is **A100-80GB** ($2.50/h on Modal) with the int8 text encoder —
-best measured cost per clip: the int8-convrot workload does not saturate
-bigger GPUs (a single RTX 5090 is within ~30% of a B200), so cheaper cards
-win on $/clip. One checkpoint + text encoder + VAEs fit in 80 GB; switching
-between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
-seconds).
+Default GPU is **H100** ($3.95/h on Modal) with the int8 text encoder.
+**Duration drives the choice**: full attention scales superlinearly, so a
+15 s clip costs far more than 3× a 5 s clip. Measured/estimated per clip:
 
-Faster options: `H3_GPU=H100` ($3.95/h, near-B200 speed expected), or the
-speed ceiling `H3_GPU=B200` + `H3_TEXT_ENCODER_VARIANT=nvfp4` ($6.25/h,
-192 GB keeps both checkpoints resident, NVFP4 runs natively).
+| GPU | 5 s clip | 15 s clip | Notes |
+|---|---|---|---|
+| A100-80GB $2.50/h | ~8–10 min | ~45–60 min ⚠️ | cheapest, **short clips only** — 15 s risks the 3600 s call timeout |
+| **H100 $3.95/h (default)** | ~5–6 min | ~25–35 min | balanced |
+| B200 $6.25/h + nvfp4 | 4 min 17 s (measured) | ~20–26 min | speed ceiling; 192 GB keeps both checkpoints resident |
+
+One checkpoint + text encoder + VAEs fit in 80 GB; on A100/H100 switching
+between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
+seconds). MiniMax's sparse-attention implementation (not yet released) is the
+real fix for long clips — we'll adopt it when it lands.
 
 Env knobs (TongFlow Settings; deploy-time — see "Applying env changes" below):
 `H3_GPU` (B200), `H3_TEXT_ENCODER_VARIANT` (nvfp4|int8), `H3_SHORT_EDGE` (768;

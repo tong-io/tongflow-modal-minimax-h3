@@ -28,8 +28,8 @@
         },
         {
             "key": "H3_GPU",
-            "default": "A100-80GB",
-            "description": "Modal GPU type. A100-80GB is the cost default; H100 is faster; B200 is the speed option (pair with H3_TEXT_ENCODER_VARIANT=nvfp4)"
+            "default": "H100",
+            "description": "Modal GPU type. H100 is the balanced default; A100-80GB is cheaper but only for short clips (<=8 s, 15 s risks timeout); B200 is the speed option (pair with H3_TEXT_ENCODER_VARIANT=nvfp4)"
         },
         {
             "key": "H3_TEXT_ENCODER_VARIANT",
