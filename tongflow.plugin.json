@@ -28,13 +28,13 @@
         },
         {
             "key": "H3_GPU",
-            "default": "B200",
-            "description": "Modal GPU type. B200 (192 GB) keeps both checkpoints resident; on H100/A100 also set H3_TEXT_ENCODER_VARIANT=int8"
+            "default": "A100-80GB",
+            "description": "Modal GPU type. A100-80GB is the cost default; H100 is faster; B200 is the speed option (pair with H3_TEXT_ENCODER_VARIANT=nvfp4)"
         },
         {
             "key": "H3_TEXT_ENCODER_VARIANT",
-            "default": "nvfp4",
-            "description": "Text encoder quantization: nvfp4 (Blackwell-native, 15.7 GB) or int8 (27.1 GB, for pre-Blackwell GPUs)"
+            "default": "int8",
+            "description": "Text encoder quantization: int8 (27.1 GB, works everywhere) or nvfp4 (15.7 GB, Blackwell/B200 only)"
         },
         {
             "key": "H3_SHORT_EDGE",

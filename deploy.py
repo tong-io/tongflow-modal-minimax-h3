@@ -25,10 +25,13 @@ prompt rewriter) is not open source, so prompts are passed through verbatim;
 ``enhance_prompt`` is accepted and ignored.
 
 Env knobs (all optional, read at deploy time — re-deploy after changing):
-  H3_GPU                   default "B200" (192 GB: both checkpoints + text
-                           encoder stay resident). Fallback: "H100" — also set
-                           H3_TEXT_ENCODER_VARIANT=int8, NVFP4 is Blackwell-native.
-  H3_TEXT_ENCODER_VARIANT  "nvfp4" (default) or "int8"; must match download.py.
+  H3_GPU                   default "A100-80GB" (best measured cost per clip;
+                           the workload does not saturate bigger GPUs).
+                           "H100" is ~faster at ~1.6x the rate; "B200" is the
+                           speed option (192 GB keeps both checkpoints + the
+                           NVFP4 text encoder resident).
+  H3_TEXT_ENCODER_VARIANT  "int8" (default) or "nvfp4" (Blackwell-only, pair
+                           with H3_GPU=B200); must match download.py.
   H3_SHORT_EDGE            canvas short edge, default 768 (model native).
                            Lower (e.g. 512) for faster, cheaper drafts.
   H3_STEPS                 sampling steps, default 20 (official template).
@@ -70,8 +73,8 @@ COMFY_LOG = "/tmp/comfy.log"
 # slots stay with the Seedance (bytedance) plugin.
 TONGFLOW_DEFAULT_SLOTS = ["refs-gen-video"]
 
-GPU = (os.environ.get("H3_GPU") or "B200").strip()
-TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lower()
+GPU = (os.environ.get("H3_GPU") or "A100-80GB").strip()
+TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "int8").strip().lower()
 SHORT_EDGE = int(os.environ.get("H3_SHORT_EDGE") or 768)
 STEPS = int(os.environ.get("H3_STEPS") or 20)
 
@@ -80,7 +83,7 @@ REF2VA_UNET = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 TEXT_ENCODER = {
     "nvfp4": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
     "int8": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
-}.get(TE_VARIANT, "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors")
+}.get(TE_VARIANT, "qwen3vl_32b_minimax_h3_int8_convrot.safetensors")
 VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 

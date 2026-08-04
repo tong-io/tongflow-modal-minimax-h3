@@ -11,8 +11,8 @@ volume, laid out as ComfyUI model dirs under /models/comfyui:
   vae/               H3 video VAE (fp16, 5.2 GB) + audio VAE (fp32, 0.6 GB)
 
 Comfy-Org/MiniMax-H3 is public; HF_TOKEN is only needed if it becomes gated.
-Set H3_TEXT_ENCODER_VARIANT=int8 (default nvfp4) to fetch the int8 text encoder
-instead — use int8 when deploying on pre-Blackwell GPUs (H100/A100).
+Set H3_TEXT_ENCODER_VARIANT=nvfp4 (default int8) to fetch the NVFP4 text
+encoder instead — Blackwell-only, pair with H3_GPU=B200.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ _TE_FILES = {
     "nvfp4": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
     "int8": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
 }
-_TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lower()
-_TE_FILE = _TE_FILES.get(_TE_VARIANT, _TE_FILES["nvfp4"])
+_TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "int8").strip().lower()
+_TE_FILE = _TE_FILES.get(_TE_VARIANT, _TE_FILES["int8"])
 
 # (repo_id, path-in-repo, comfyui-subdir, flat-dest-name)
 # Filenames must match the graph builder in deploy.py exactly.

@@ -46,15 +46,20 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 |---|---|
 | `diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors` | 21.0 GB |
 | `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` | 21.0 GB |
-| `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | 15.7 GB |
+| `text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors` | 27.1 GB |
 | `vae/minimax_h3_video_vae_fp16.safetensors` | 5.2 GB |
 | `vae/minimax_h3_audio_vae_fp32.safetensors` | 0.6 GB |
 
-Default GPU is **B200** ($6.25/h on Modal): 192 GB keeps both checkpoints, the
-text encoder and both VAEs resident (no reload when switching slots), and the
-NVFP4 text encoder runs natively (Blackwell format). Fallback for H100/A100:
-set `H3_GPU=H100` **and** `H3_TEXT_ENCODER_VARIANT=int8` (re-run the download,
-+27 GB), expect checkpoint swapping between FL2VA and Ref2VA slots.
+Default GPU is **A100-80GB** ($2.50/h on Modal) with the int8 text encoder —
+best measured cost per clip: the int8-convrot workload does not saturate
+bigger GPUs (a single RTX 5090 is within ~30% of a B200), so cheaper cards
+win on $/clip. One checkpoint + text encoder + VAEs fit in 80 GB; switching
+between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
+seconds).
+
+Faster options: `H3_GPU=H100` ($3.95/h, near-B200 speed expected), or the
+speed ceiling `H3_GPU=B200` + `H3_TEXT_ENCODER_VARIANT=nvfp4` ($6.25/h,
+192 GB keeps both checkpoints resident, NVFP4 runs natively).
 
 Env knobs (TongFlow Settings; deploy-time — see "Applying env changes" below):
 `H3_GPU` (B200), `H3_TEXT_ENCODER_VARIANT` (nvfp4|int8), `H3_SHORT_EDGE` (768;
@@ -130,10 +135,13 @@ changing `H3_*` env vars in Settings, force a re-deploy by clearing the cache
 entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 `modal deploy deploy.py` manually with the new env exported.
 
-## Measured performance (2026-08-03, B200, nvfp4 TE, defaults)
+## Measured performance
 
-- **5 s clip @ 768p 16:9: 4 min 17 s steady-state** (≈ $0.45/clip at $6.25/h).
-  Output quality verified comparable to Seedance 2.0.
+- **B200 + nvfp4 TE (2026-08-03): 5 s clip @ 768p 16:9 in 4 min 17 s**
+  steady-state (≈ $0.45/clip at $6.25/h). Output quality verified comparable
+  to Seedance 2.0.
+- A100-80GB (current default): not yet timed — expected ~7–10 min per 5 s
+  clip (≈ $0.29–0.42).
 - 15 s extrapolates to roughly 12–15 min (full attention scales superlinearly;
   not yet measured — see runbook step 4).
 - For faster drafts lower `H3_SHORT_EDGE` (e.g. 512) — generation time scales
