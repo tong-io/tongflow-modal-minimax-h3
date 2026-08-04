@@ -57,9 +57,9 @@ hourly rate). Measured / estimated per clip at native 768p:
 
 | GPU | 5 s clip | 10 s clip | 15 s clip | Notes |
 |---|---|---|---|---|
-| **RTX-PRO-6000 $3.03/h (default)** | being timed | being timed | — | Blackwell 96 GB: nvfp4 native, both checkpoints resident; beats B200 per clip if within ~2× its time |
-| B200 $6.25/h | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | speed option; both checkpoints resident in 192 GB |
-| H100 $3.95/h + int8 TE | ~10 min | **20 m 25 s ($1.34) ✓** | ~35–40 min | quota fallback |
+| **RTX-PRO-6000 $3.03/h (default)** | ~7–8 min (~$0.39) | **18 m 11 s ($0.92) ✓** | ~33–37 min (~$1.75) | cheapest per clip; Blackwell 96 GB, nvfp4 native, both checkpoints resident |
+| B200 $6.25/h | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | speed option: 45% faster for ~14% more per clip |
+| H100 $3.95/h + int8 TE | ~10 min | **20 m 25 s ($1.34) ✓** | ~35–40 min | dominated by RTX-PRO-6000 (slower and pricier) |
 | A100-80GB $2.50/h + int8 TE | ~15 min | >40 min (aborted) ✓ | ⚠️ times out | not recommended |
 
 (✓ = measured, 2026-08-03/04.) Full attention scales superlinearly with
@@ -147,11 +147,12 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 ## Measured performance
 
-- **B200 + nvfp4 TE: 5 s in 4 m 17 s ($0.45); 10 s in 10 m 04 s ($1.05)** —
-  fastest and cheapest per clip. Output quality verified comparable to
-  Seedance 2.0.
-- H100 + int8 TE: 10 s in 20 m 25 s ($1.34) — ~2× slower than B200, costs
-  more per clip.
+- **RTX-PRO-6000 + nvfp4 TE: 10 s in 18 m 11 s ($0.92)** — cheapest per clip,
+  now the default.
+- B200 + nvfp4 TE: 5 s in 4 m 17 s ($0.45); 10 s in 10 m 04 s ($1.05) — the
+  speed option. Output quality verified comparable to Seedance 2.0.
+- H100 + int8 TE: 10 s in 20 m 25 s ($1.34) — slower and pricier than
+  RTX-PRO-6000; only a quota fallback.
 - A100-80GB: a 15 s clip exceeded 40 min and was aborted — not recommended.
 - Full attention scales superlinearly with duration (10 s costs ~2.3× a 5 s
   clip); MiniMax's unreleased sparse attention is the long-clip fix.
