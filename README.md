@@ -57,7 +57,8 @@ hourly rate). Measured / estimated per clip at native 768p:
 
 | GPU | 5 s clip | 10 s clip | 15 s clip | Notes |
 |---|---|---|---|---|
-| **B200 $6.25/h (default)** | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | fastest AND cheapest; both checkpoints resident in 192 GB |
+| **RTX-PRO-6000 $3.03/h (default)** | being timed | being timed | — | Blackwell 96 GB: nvfp4 native, both checkpoints resident; beats B200 per clip if within ~2× its time |
+| B200 $6.25/h | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | speed option; both checkpoints resident in 192 GB |
 | H100 $3.95/h + int8 TE | ~10 min | **20 m 25 s ($1.34) ✓** | ~35–40 min | quota fallback |
 | A100-80GB $2.50/h + int8 TE | ~15 min | >40 min (aborted) ✓ | ⚠️ times out | not recommended |
 

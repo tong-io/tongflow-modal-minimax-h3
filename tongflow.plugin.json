@@ -28,8 +28,8 @@
         },
         {
             "key": "H3_GPU",
-            "default": "B200",
-            "description": "Modal GPU type. B200 measured fastest and cheapest per clip; H100/A100-80GB are quota fallbacks (pair with H3_TEXT_ENCODER_VARIANT=int8; A100 for short clips only)"
+            "default": "RTX-PRO-6000",
+            "description": "Modal GPU type. RTX-PRO-6000 (Blackwell 96 GB, $3.03/h) is the cost default; B200 is the speed option; H100/A100-80GB are quota fallbacks (pair with H3_TEXT_ENCODER_VARIANT=int8; A100 for short clips only)"
         },
         {
             "key": "H3_TEXT_ENCODER_VARIANT",

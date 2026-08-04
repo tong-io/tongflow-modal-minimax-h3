@@ -25,11 +25,13 @@ prompt rewriter) is not open source, so prompts are passed through verbatim;
 ``enhance_prompt`` is accepted and ignored.
 
 Env knobs (all optional, read at deploy time — re-deploy after changing):
-  H3_GPU                   default "B200" — measured both fastest AND cheapest
-                           per clip (10 s: 10m04 / $1.05 vs H100 20m25 /
-                           $1.34). "H100"/"A100-80GB" are fallbacks for quota;
-                           pair them with H3_TEXT_ENCODER_VARIANT=int8, and
-                           note A100 suits short clips only (15 s times out).
+  H3_GPU                   default "RTX-PRO-6000" (Blackwell, 96 GB, $3.03/h:
+                           runs nvfp4 natively, holds both checkpoints, and
+                           undercuts B200 per clip if it stays within ~2x its
+                           time). "B200" is the proven speed option (10 s:
+                           10m04 / $1.05). "H100"/"A100-80GB" are quota
+                           fallbacks — pair with H3_TEXT_ENCODER_VARIANT=int8;
+                           A100 suits short clips only (15 s times out).
   H3_TEXT_ENCODER_VARIANT  "nvfp4" (default, Blackwell/B200 only) or "int8"
                            (works everywhere); must match download.py.
   H3_SHORT_EDGE            canvas short edge, default 768 (model native).
@@ -73,7 +75,7 @@ COMFY_LOG = "/tmp/comfy.log"
 # slots stay with the Seedance (bytedance) plugin.
 TONGFLOW_DEFAULT_SLOTS = ["refs-gen-video"]
 
-GPU = (os.environ.get("H3_GPU") or "B200").strip()
+GPU = (os.environ.get("H3_GPU") or "RTX-PRO-6000").strip()
 TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lower()
 SHORT_EDGE = int(os.environ.get("H3_SHORT_EDGE") or 768)
 STEPS = int(os.environ.get("H3_STEPS") or 20)
