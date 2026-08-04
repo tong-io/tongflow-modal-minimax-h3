@@ -50,15 +50,15 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `vae/minimax_h3_video_vae_fp16.safetensors` | 5.2 GB |
 | `vae/minimax_h3_audio_vae_fp32.safetensors` | 0.6 GB |
 
-Default GPU is **B200** ($6.25/h on Modal) with the NVFP4 text encoder —
-measured **both fastest and cheapest per clip** (Blackwell runs the
-int8-convrot/NVFP4 kernels ~2× faster than Hopper, more than offsetting the
-hourly rate). Measured / estimated per clip at native 768p:
+Default GPU is **B200** ($6.25/h on Modal) with the NVFP4 text encoder — the
+fastest option, at only ~12% more per clip than the budget RTX-PRO-6000
+(Blackwell runs the int8-convrot/NVFP4 kernels ~2× faster than Hopper, so
+Hopper cards lose on both axes). Measured / estimated per clip at native 768p:
 
 | GPU | 5 s clip | 10 s clip | 15 s clip | Notes |
 |---|---|---|---|---|
-| **RTX-PRO-6000 $3.03/h (default)** | ~7–8 min (~$0.39) | **18 m 11 s ($0.92) ✓** | ~33–37 min (~$1.75) | cheapest per clip; Blackwell 96 GB, nvfp4 native, both checkpoints resident |
-| B200 $6.25/h | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | speed option: 45% faster for ~14% more per clip |
+| **B200 $6.25/h (default)** | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | fastest; both checkpoints resident in 192 GB |
+| RTX-PRO-6000 $3.03/h | ~7–8 min (~$0.39) | **18 m 11 s ($0.92) ✓** | ~33–37 min (~$1.75) | budget option: ~45% slower, ~12% cheaper per clip; Blackwell 96 GB, nvfp4 native |
 | H100 $3.95/h + int8 TE | ~10 min | **20 m 25 s ($1.34) ✓** | ~35–40 min | dominated by RTX-PRO-6000 (slower and pricier) |
 | A100-80GB $2.50/h + int8 TE | ~15 min | >40 min (aborted) ✓ | ⚠️ times out | not recommended |
 
@@ -147,10 +147,10 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 ## Measured performance
 
-- **RTX-PRO-6000 + nvfp4 TE: 10 s in 18 m 11 s ($0.92)** — cheapest per clip,
-  now the default.
-- B200 + nvfp4 TE: 5 s in 4 m 17 s ($0.45); 10 s in 10 m 04 s ($1.05) — the
-  speed option. Output quality verified comparable to Seedance 2.0.
+- **B200 + nvfp4 TE (default): 5 s in 4 m 17 s ($0.45); 10 s in
+  10 m 04 s ($1.05)** — fastest. Output quality verified comparable to
+  Seedance 2.0.
+- RTX-PRO-6000 + nvfp4 TE: 10 s in 18 m 11 s ($0.92) — the budget option.
 - H100 + int8 TE: 10 s in 20 m 25 s ($1.34) — slower and pricier than
   RTX-PRO-6000; only a quota fallback.
 - A100-80GB: a 15 s clip exceeded 40 min and was aborted — not recommended.

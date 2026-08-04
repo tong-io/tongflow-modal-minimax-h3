@@ -25,11 +25,10 @@ prompt rewriter) is not open source, so prompts are passed through verbatim;
 ``enhance_prompt`` is accepted and ignored.
 
 Env knobs (all optional, read at deploy time — re-deploy after changing):
-  H3_GPU                   default "RTX-PRO-6000" (Blackwell, 96 GB, $3.03/h:
-                           runs nvfp4 natively, holds both checkpoints, and
-                           undercuts B200 per clip if it stays within ~2x its
-                           time). "B200" is the proven speed option (10 s:
-                           10m04 / $1.05). "H100"/"A100-80GB" are quota
+  H3_GPU                   default "B200" (fastest: 10 s = 10m04 / $1.05).
+                           "RTX-PRO-6000" is the budget option (Blackwell
+                           96 GB, 10 s = 18m11 / $0.92 — 45% slower, 12%
+                           cheaper). "H100"/"A100-80GB" only as quota
                            fallbacks — pair with H3_TEXT_ENCODER_VARIANT=int8;
                            A100 suits short clips only (15 s times out).
   H3_TEXT_ENCODER_VARIANT  "nvfp4" (default, Blackwell/B200 only) or "int8"
@@ -75,7 +74,7 @@ COMFY_LOG = "/tmp/comfy.log"
 # slots stay with the Seedance (bytedance) plugin.
 TONGFLOW_DEFAULT_SLOTS = ["refs-gen-video"]
 
-GPU = (os.environ.get("H3_GPU") or "RTX-PRO-6000").strip()
+GPU = (os.environ.get("H3_GPU") or "B200").strip()
 TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lower()
 SHORT_EDGE = int(os.environ.get("H3_SHORT_EDGE") or 768)
 STEPS = int(os.environ.get("H3_STEPS") or 20)
