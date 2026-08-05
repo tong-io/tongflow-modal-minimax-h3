@@ -225,9 +225,9 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
         "class_type": "SolAttnPatch",
         "inputs": {
             "model": ["1", 0],
-            "tau": 1.3,
-            "start_percent": 0.2,
-            "end_percent": 0.9,
+            "tau": 1.5,
+            "start_percent": 0.1,
+            "end_percent": 0.95,
             "min_tokens": 4096,
             "int8_qk": True,
             "sink_conditioning": "exact_kv_and_rows",
@@ -235,7 +235,7 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
             "morton_curve": "2d_frame",
             "verbose": False,
             "use_tma": False,
-            "dense_blocks": "",
+            "dense_blocks": "0-2,-1",
         },
     }
     wf["6"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}}
