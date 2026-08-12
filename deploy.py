@@ -279,6 +279,9 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
             "end_percent": 0.95,
             "min_tokens": 4096,
             "int8_qk": True,
+            # Required since the 2026-08-08 V3-schema rework of the node:
+            # INT8 P@V alongside INT8 QK ("the other half of the int8 win").
+            "int8_pv": True,
             "sink_conditioning": "exact_kv_and_rows",
             "morton": True,
             "morton_curve": "2d_frame",
