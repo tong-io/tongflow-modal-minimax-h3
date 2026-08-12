@@ -9,6 +9,8 @@ volume, laid out as ComfyUI model dirs under /models/comfyui:
   diffusion_models/  H3 FL2VA + Ref2VA packed DiT (pruned int8 convrot, 21 GB each)
   text_encoders/     Qwen3-VL-32B H3 encoder (nvfp4 awq 15.7 GB or int8 27.1 GB)
   vae/               H3 video VAE (fp16, 5.2 GB) + audio VAE (fp32, 0.6 GB)
+  loras/             LightX2V FL2VA Turbo distill LoRA (ComfyUI export, 2.0 GB;
+                     used only when the deploy sets H3_TURBO=1)
 
 Comfy-Org/MiniMax-H3 is public; HF_TOKEN is only needed if it becomes gated.
 Set H3_TEXT_ENCODER_VARIANT=nvfp4 (default int8) to fetch the NVFP4 text
@@ -65,6 +67,15 @@ MODELS = [
         "vae/minimax_h3_audio_vae_fp32.safetensors",
         "vae",
         "minimax_h3_audio_vae_fp32.safetensors",
+    ),
+    # LightX2V FL2VA Turbo distill LoRA (Apache-2.0), native ComfyUI key
+    # layout — loaded by deploy.py's LoraLoaderModelOnly when H3_TURBO=1.
+    # Downloaded unconditionally (2 GB) so flipping H3_TURBO needs no re-run.
+    (
+        "lightx2v/Minimax-h3-Turbo",
+        "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        "loras",
+        "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
     ),
 ]
 

@@ -49,6 +49,7 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors` | 27.1 GB |
 | `vae/minimax_h3_video_vae_fp16.safetensors` | 5.2 GB |
 | `vae/minimax_h3_audio_vae_fp32.safetensors` | 0.6 GB |
+| `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | 2.0 GB |
 
 Default GPU is **B200** ($6.25/h on Modal) with the NVFP4 text encoder — the
 fastest option, at only ~12% more per clip than the budget RTX-PRO-6000
@@ -73,23 +74,37 @@ real fix for long clips — we'll adopt it when it lands.
 
 Env knobs (TongFlow Settings; deploy-time — see "Applying env changes" below):
 `H3_GPU` (B200), `H3_TEXT_ENCODER_VARIANT` (nvfp4|int8), `H3_SHORT_EDGE` (768;
-lower it for faster drafts), `H3_STEPS` (20).
+lower it for faster drafts), `H3_STEPS` (20), and the FL2VA turbo family:
+`H3_TURBO` (off; set `1` to run the three FL2VA slots with the
+[LightX2V Turbo distill LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo)
+at `H3_TURBO_STEPS` (8) plain Euler — ~2.5× fewer sampling steps),
+`H3_TURBO_LORA`, `H3_TURBO_STRENGTH` (1.0).
+
+**Turbo scope & status:** FL2VA slots only (`text-gen-video`,
+`image-gen-video`, `image-image-gen-video`). Ref2VA slots — including the
+default `refs-gen-video` — always run the un-distilled 20-step path; no Ref2VA
+distill exists yet (LightX2V roadmap item 2). v1.0 shipped 2026-08-11 with
+native-ComfyUI-format weights; **A/B the same seed against `H3_TURBO=0` before
+leaving it on** (known distill trade-off: quiet/sustained vocals degrade
+first). The 4-step 768p variant needs video shift 6 — not wired up; stick to
+the 8-step model, whose 12/3 training shifts match H3's native schedule.
 
 ## Test runbook (run these yourself — every step below bills Modal)
 
 Use the venv modal client (`sdk/.venv/bin/modal` from the tongflow repo) with
 `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` exported, from this plugin directory.
 
-### 1. Download weights (~63 GB, CPU-only, one-off)
+### 1. Download weights (~65 GB, CPU-only, one-off)
 
 ```bash
 modal run download.py::download
 modal volume ls models comfyui/diffusion_models
 modal volume ls models comfyui/text_encoders
 modal volume ls models comfyui/vae
+modal volume ls models comfyui/loras
 ```
 
-Expect the five files above with matching sizes. Re-running skips existing
+Expect the six files above with matching sizes. Re-running skips existing
 files; a mid-download failure resumes where it stopped (per-file commits).
 
 ### 2. Deploy + boot check
@@ -163,6 +178,11 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 ## Known gaps / notes
 
+- ComfyUI is pinned to **v0.32.0** (first release bundling every post-launch
+  H3 fix: the ModelSamplingAV audio protocol switch #15243, VAE optimization
+  #15446, VAEDecodeTiled crash #15477, peak-memory fix #15486). The audio
+  sampling semantics changed vs the previous v0.30.0 pin — A/B one clip's
+  audio after upgrading. Sol-Attn is pinned to its 2026-08-08 commit.
 - The Ref2VA graph wires references via ComfyUI autogrow inputs
   (`ref_images.ref_image_0` …) — validated against the v0.30.0 template
   serialization, but the first live run is the real test (a rejection error

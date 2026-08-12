@@ -39,6 +39,18 @@ Env knobs (all optional, read at deploy time — re-deploy after changing):
   H3_SHORT_EDGE            canvas short edge, default 768 (model native).
                            Lower (e.g. 512) for faster, cheaper drafts.
   H3_STEPS                 sampling steps, default 20 (official template).
+  H3_TURBO                 "1" to enable the LightX2V FL2VA Turbo LoRA
+                           (lightx2v/Minimax-h3-Turbo, 8-step v1.0, Apache-2.0)
+                           on the three FL2VA slots. Default off — A/B against
+                           the 20-step baseline before enabling. Ref2VA slots
+                           (incl. the default refs-gen-video) always run the
+                           un-distilled 20-step path: no Ref2VA distill exists
+                           yet (LightX2V roadmap item 2).
+  H3_TURBO_STEPS           FL2VA turbo sampling steps, default 8 (the model's
+                           distillation NFE; 4 is valid but softer).
+  H3_TURBO_LORA            LoRA filename under loras/, default the 8-step
+                           v1.0 ComfyUI export; must match download.py.
+  H3_TURBO_STRENGTH        LoRA strength, default 1.0 (tuned value).
 
 Deploy:           modal deploy deploy.py
 Download weights: modal run download.py::download
@@ -69,7 +81,14 @@ from tongflow.protocol import asset, prompt_media_to_bytes
 from tongflow.slots import node_slot
 
 COMFY = "/opt/ComfyUI"
-COMFY_TAG = "v0.30.0"  # first release with the MiniMax H3 nodes
+# v0.32.0 collects every post-release H3 fix: audio sampler protocol switch to
+# ModelSamplingAV (#15243), audio-VAE full offload (#15377), noise mask
+# (#15322), VAE optimization (#15446), VAEDecodeTiled crash (#15477), and the
+# peak-memory fix (#15486). (v0.30.0 was the first release with the H3 nodes.)
+COMFY_TAG = "v0.32.0"
+# Pin Sol-Attn: repo has no tags and moves fast; this is the 2026-08-08
+# "Fixes and optimizations" commit, after ComfyUI's H3 audio protocol switch.
+SOLATTN_COMMIT = "842c4eaa7d91"
 COMFY_MODELS = "/models/comfyui"
 COMFY_LOG = "/tmp/comfy.log"
 
@@ -81,6 +100,16 @@ GPU = (os.environ.get("H3_GPU") or "B200").strip()
 TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lower()
 SHORT_EDGE = int(os.environ.get("H3_SHORT_EDGE") or 768)
 STEPS = int(os.environ.get("H3_STEPS") or 20)
+
+# FL2VA Turbo (LightX2V distill LoRA). Off by default; FL2VA slots only —
+# there is no Ref2VA distill yet, so Ref2VA graphs never use this.
+TURBO = (os.environ.get("H3_TURBO") or "").strip().lower() in ("1", "true", "on")
+TURBO_STEPS = int(os.environ.get("H3_TURBO_STEPS") or 8)
+TURBO_LORA = (
+    os.environ.get("H3_TURBO_LORA")
+    or "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+).strip()
+TURBO_STRENGTH = float(os.environ.get("H3_TURBO_STRENGTH") or 1.0)
 
 FL2VA_UNET = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
 REF2VA_UNET = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
@@ -127,7 +156,9 @@ image = (
         f"pip install -r {COMFY}/requirements.txt",
         "pip install --upgrade 'triton>=3.3' --no-deps",
         f"git clone https://github.com/kijai/ComfyUI-SolAttn_triton.git "
-        f"{COMFY}/custom_nodes/ComfyUI-SolAttn_triton",
+        f"{COMFY}/custom_nodes/ComfyUI-SolAttn_triton && "
+        f"git -C {COMFY}/custom_nodes/ComfyUI-SolAttn_triton "
+        f"checkout {SOLATTN_COMMIT}",
     )
     .pip_install("tongflow==0.2.21", "fastapi[standard]", "triton>=3.3")
     .env({"PYTHONPATH": COMFY, "HF_HOME": "/models/hf"})
@@ -217,14 +248,32 @@ def _seed(value: object) -> int:
 _AUDIO_EXT = {"audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
 
 
-def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int) -> None:
+def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int,
+                    turbo: bool = False) -> None:
     """Shared tail of both graphs: loaders are added by the callers; this wires
     the official template's custom sampling stack + AV decode + mp4 mux.
-    Includes Sol-Attn sparse attention optimization (kijai/Triton) for ~3.9× speedup."""
+    Includes Sol-Attn sparse attention optimization (kijai/Triton) for ~3.9× speedup.
+
+    With ``turbo`` (FL2VA only): the LightX2V distill LoRA is applied between
+    the UNet loader and Sol-Attn, and sampling drops to TURBO_STEPS plain Euler
+    on the ``simple`` schedule — the uniform-grid contract the LoRA was
+    distilled on (training shifts 12/3 = H3 native defaults, handled by
+    ComfyUI's ModelSamplingAV since v0.31)."""
+    model_src = "1"
+    if turbo:
+        wf["49"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": ["1", 0],
+                "lora_name": TURBO_LORA,
+                "strength_model": TURBO_STRENGTH,
+            },
+        }
+        model_src = "49"
     wf["50"] = {
         "class_type": "SolAttnPatch",
         "inputs": {
-            "model": ["1", 0],
+            "model": [model_src, 0],
             "tau": 1.5,
             "start_percent": 0.1,
             "end_percent": 0.95,
@@ -239,10 +288,14 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
         },
     }
     wf["6"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}}
-    wf["7"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "res_multistep"}}
+    wf["7"] = {
+        "class_type": "KSamplerSelect",
+        "inputs": {"sampler_name": "euler" if turbo else "res_multistep"},
+    }
     wf["8"] = {
         "class_type": "BasicScheduler",
-        "inputs": {"model": ["50", 0], "scheduler": "simple", "steps": STEPS, "denoise": 1.0},
+        "inputs": {"model": ["50", 0], "scheduler": "simple",
+                   "steps": TURBO_STEPS if turbo else STEPS, "denoise": 1.0},
     }
     wf["9"] = {
         "class_type": "BasicGuider",
@@ -298,7 +351,7 @@ def _fl2va_graph(prompt: str, width: int, height: int, frames: int, seed: int,
         wf["11"] = {"class_type": "LoadImage", "inputs": {"image": last_frame}}
         cond_inputs["last_frame"] = ["11", 0]
     wf["5"] = {"class_type": "MiniMaxH3ImageToVideo", "inputs": cond_inputs}
-    _sampling_stack(wf, "5", ("5", 1), seed)
+    _sampling_stack(wf, "5", ("5", 1), seed, turbo=TURBO)
     return wf
 
 
@@ -341,7 +394,12 @@ def _ref2va_graph(prompt: str, width: int, height: int, frames: int, seed: int,
 
 
 def _submit_graph(base, wf):
-    """Submit an API workflow, poll, return (True, mp4_bytes) or (False, error)."""
+    """Submit an API workflow, poll, return (True, mp4_bytes) or (False, error).
+
+    Prints [h3-timing] phase lines to the container stdout (visible in Modal
+    logs, unlike the ComfyUI subprocess log): queue->done wall clock, plus the
+    sampling-only span parsed from history execution messages when present."""
+    t0 = time.monotonic()
     body = json.dumps({"prompt": wf}).encode()
     req = urllib.request.Request(
         f"{base}/prompt", data=body, headers={"Content-Type": "application/json"}
@@ -362,6 +420,8 @@ def _submit_graph(base, wf):
         status = h.get("status", {})
         final_status = status
         if status.get("status_str") == "error":
+            print(f"[h3-timing] graph FAILED after {time.monotonic() - t0:.0f}s",
+                  flush=True)
             return False, (
                 "comfy error: " + json.dumps(status.get("messages", status))[:1500]
                 + "\n[server log]\n" + _tail_log()
@@ -370,7 +430,21 @@ def _submit_graph(base, wf):
             out = h["outputs"]
             break
     if not out:
+        print(f"[h3-timing] graph TIMED OUT after {time.monotonic() - t0:.0f}s",
+              flush=True)
         return False, "timed out\n[server log]\n" + _tail_log()
+    # execution_start/_success carry ms timestamps -> pure execution span
+    # (excludes our polling latency; on first run it includes model load).
+    exec_s = None
+    try:
+        stamps = {m[0]: m[1].get("timestamp") for m in final_status.get("messages", [])
+                  if isinstance(m, (list, tuple)) and len(m) > 1 and isinstance(m[1], dict)}
+        if stamps.get("execution_start") and stamps.get("execution_success"):
+            exec_s = (stamps["execution_success"] - stamps["execution_start"]) / 1000.0
+    except Exception:
+        pass
+    print(f"[h3-timing] graph done: wall={time.monotonic() - t0:.0f}s"
+          + (f" exec={exec_s:.0f}s" if exec_s else ""), flush=True)
     for node_out in out.values():
         for key in ("gifs", "videos", "images"):
             for item in node_out.get(key, []):
@@ -407,6 +481,7 @@ class Inference:
     @modal.enter()
     def _boot(self) -> None:
         """Boot the ComfyUI server once; reused across calls (models stay warm)."""
+        t0 = time.monotonic()
         os.makedirs(COMFY_MODELS, exist_ok=True)
         with open(os.path.join(COMFY, "extra_model_paths.yaml"), "w") as f:
             f.write(
@@ -415,6 +490,14 @@ class Inference:
                 "  diffusion_models: diffusion_models\n"
                 "  vae: vae\n"
                 "  text_encoders: text_encoders\n"
+                "  loras: loras\n"
+            )
+        if TURBO and not os.path.isfile(
+            os.path.join(COMFY_MODELS, "loras", TURBO_LORA)
+        ):
+            raise RuntimeError(
+                f"H3_TURBO=1 but loras/{TURBO_LORA} is missing from the models "
+                "volume — run `modal run download.py::download` first"
             )
         self._logfh = open(COMFY_LOG, "wb")
         self.proc = subprocess.Popen(
@@ -451,6 +534,13 @@ class Inference:
                 raise RuntimeError(
                     f"{cls} missing from ComfyUI {COMFY_TAG} — bump COMFY_TAG"
                 )
+        print(
+            f"[h3-timing] comfy {COMFY_TAG} ready in {time.monotonic() - t0:.0f}s "
+            f"(gpu={GPU} te={TE_VARIANT} steps={STEPS} turbo="
+            + (f"on/{TURBO_STEPS}step/{TURBO_LORA}" if TURBO else "off")
+            + ") — weights load lazily on the first graph",
+            flush=True,
+        )
 
     @modal.exit()
     def _shutdown(self) -> None:
@@ -500,6 +590,8 @@ class Inference:
                first: Optional[bytes], last: Optional[bytes]):
         w, h = _canvas(width, height)
         frames = _frames_from_duration(duration)
+        print(f"[h3-timing] request fl2va {w}x{h} {frames}f "
+              f"steps={TURBO_STEPS if TURBO else STEPS} turbo={TURBO}", flush=True)
         first_fn = self._write_input("first.png", first) if first else None
         last_fn = self._write_input("last.png", last) if last else None
         wf = _fl2va_graph((text or "").strip(), w, h, frames, _seed(seed),
@@ -509,6 +601,8 @@ class Inference:
     def _ref2va(self, text, width, height, frames, seed,
                 images: list[bytes], videos: list[bytes], audios: list) -> tuple:
         w, h = _canvas(width, height)
+        print(f"[h3-timing] request ref2va {w}x{h} {frames}f steps={STEPS} "
+              f"refs={len(images)}i/{len(videos)}v/{len(audios)}a", flush=True)
         image_files = [
             self._write_input(f"ref_img_{i}.png", b) for i, b in enumerate(images)
         ]
@@ -608,6 +702,8 @@ class Inference:
         )
         w, h = _canvas(input.width, input.height)
         img_fn = self._write_input("ref_img_0.png", img)
+        print(f"[h3-timing] request ref2va(audio-image) {w}x{h} {frames}f "
+              f"steps={STEPS}", flush=True)
         wf = _ref2va_graph(text, w, h, frames, 42, [img_fn], [], [aud_fn])
         ok, res = _submit_graph(self.base, wf)
         if ok:
