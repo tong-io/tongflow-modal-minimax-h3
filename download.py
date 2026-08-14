@@ -68,14 +68,20 @@ MODELS = [
         "vae",
         "minimax_h3_audio_vae_fp32.safetensors",
     ),
-    # LightX2V FL2VA Turbo distill LoRA (Apache-2.0), native ComfyUI key
-    # layout — loaded by deploy.py's LoraLoaderModelOnly when H3_TURBO=1.
-    # Downloaded unconditionally (2 GB) so flipping H3_TURBO needs no re-run.
+    # LightX2V Turbo distill LoRAs (Apache-2.0), native ComfyUI key layout —
+    # loaded by deploy.py's LoraLoaderModelOnly when H3_TURBO / H3_TURBO_REF
+    # is set. Downloaded unconditionally (~4 GB) so flipping needs no re-run.
     (
         "lightx2v/Minimax-h3-Turbo",
         "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
         "loras",
         "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+    ),
+    (
+        "lightx2v/Minimax-h3-Turbo",
+        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "loras",
+        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
     ),
 ]
 

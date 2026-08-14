@@ -50,7 +50,18 @@ Env knobs (all optional, read at deploy time — re-deploy after changing):
                            distillation NFE; 4 is valid but softer).
   H3_TURBO_LORA            LoRA filename under loras/, default the 8-step
                            v1.0 ComfyUI export; must match download.py.
-  H3_TURBO_STRENGTH        LoRA strength, default 1.0 (tuned value).
+  H3_TURBO_STRENGTH        LoRA strength, default 1.0 (tuned value); shared
+                           by the Ref2VA turbo LoRA.
+  H3_TURBO_REF             "1" to run the Ref2VA slots (incl. the default
+                           refs-gen-video) with the LightX2V Ref2VA Turbo
+                           4-step v0.1 LoRA. Younger than the FL2VA one
+                           (v0.1) and upstream pairs it with the FULL bf16
+                           base, not our pruned int8 — A/B before enabling.
+  H3_TURBO_REF_STEPS       Ref2VA turbo steps, default 4 (distill NFE).
+  H3_TURBO_REF_LORA        Ref2VA LoRA filename, must match download.py.
+  H3_SHIFT_VIDEO           video sigma shift, default 12 (H3 native); the
+  H3_SHIFT_AUDIO           audio shift, default 3. Set video=6 for the
+                           fl2v 768p 4-step LoRA variant.
 
 Deploy:           modal deploy deploy.py
 Download weights: modal run download.py::download
@@ -101,8 +112,7 @@ TE_VARIANT = (os.environ.get("H3_TEXT_ENCODER_VARIANT") or "nvfp4").strip().lowe
 SHORT_EDGE = int(os.environ.get("H3_SHORT_EDGE") or 768)
 STEPS = int(os.environ.get("H3_STEPS") or 20)
 
-# FL2VA Turbo (LightX2V distill LoRA). Off by default; FL2VA slots only —
-# there is no Ref2VA distill yet, so Ref2VA graphs never use this.
+# FL2VA Turbo (LightX2V distill LoRA). Off by default; FL2VA slots only.
 TURBO = (os.environ.get("H3_TURBO") or "").strip().lower() in ("1", "true", "on")
 TURBO_STEPS = int(os.environ.get("H3_TURBO_STEPS") or 8)
 TURBO_LORA = (
@@ -110,6 +120,24 @@ TURBO_LORA = (
     or "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
 ).strip()
 TURBO_STRENGTH = float(os.environ.get("H3_TURBO_STRENGTH") or 1.0)
+# Ref2VA Turbo (LightX2V Ref2VA 4-step v0.1, 2026-08-13). Separate knob from
+# H3_TURBO: it is a generation younger (v0.1 vs v1.0) and gates our DEFAULT
+# slot (refs-gen-video), so it must be opt-in on its own. Caveat: the official
+# example workflow pairs this LoRA with the FULL bf16 Ref2VA base, not our
+# pruned int8 — compatibility with the pruned base is untested upstream.
+TURBO_REF = (
+    os.environ.get("H3_TURBO_REF") or ""
+).strip().lower() in ("1", "true", "on")
+TURBO_REF_STEPS = int(os.environ.get("H3_TURBO_REF_STEPS") or 4)
+TURBO_REF_LORA = (
+    os.environ.get("H3_TURBO_REF_LORA")
+    or "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+).strip()
+# Explicit AV sigma shifts on the sampling model, mirroring the official
+# LightX2V workflows (MiniMaxH3SigmaShift 12/3 = H3 native defaults; the
+# fl2v 768p 4-step variant needs H3_SHIFT_VIDEO=6).
+SHIFT_VIDEO = float(os.environ.get("H3_SHIFT_VIDEO") or 12.0)
+SHIFT_AUDIO = float(os.environ.get("H3_SHIFT_AUDIO") or 3.0)
 
 FL2VA_UNET = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
 REF2VA_UNET = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
@@ -249,27 +277,35 @@ _AUDIO_EXT = {"audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "au
 
 
 def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int,
-                    turbo: bool = False) -> None:
+                    turbo_lora: Optional[str] = None, turbo_steps: int = 0) -> None:
     """Shared tail of both graphs: loaders are added by the callers; this wires
     the official template's custom sampling stack + AV decode + mp4 mux.
     Includes Sol-Attn sparse attention optimization (kijai/Triton) for ~3.9× speedup.
 
-    With ``turbo`` (FL2VA only): the LightX2V distill LoRA is applied between
-    the UNet loader and Sol-Attn, and sampling drops to TURBO_STEPS plain Euler
-    on the ``simple`` schedule — the uniform-grid contract the LoRA was
-    distilled on (training shifts 12/3 = H3 native defaults, handled by
-    ComfyUI's ModelSamplingAV since v0.31)."""
+    With ``turbo_lora`` set: the LightX2V distill LoRA is applied right after
+    the UNet loader and sampling drops to ``turbo_steps`` plain Euler on the
+    ``simple`` schedule — the uniform-grid contract the LoRAs were distilled
+    on. Model chain mirrors the official LightX2V workflows:
+    UNETLoader -> [LoraLoaderModelOnly] -> MiniMaxH3SigmaShift -> SolAttn."""
     model_src = "1"
-    if turbo:
+    if turbo_lora:
         wf["49"] = {
             "class_type": "LoraLoaderModelOnly",
             "inputs": {
                 "model": ["1", 0],
-                "lora_name": TURBO_LORA,
+                "lora_name": turbo_lora,
                 "strength_model": TURBO_STRENGTH,
             },
         }
         model_src = "49"
+    # Explicit AV shifts (12/3 = native defaults; kept in the graph so variants
+    # like the fl2v 768p 4-step model, shift 6/3, are one env change away).
+    wf["51"] = {
+        "class_type": "MiniMaxH3SigmaShift",
+        "inputs": {"model": [model_src, 0],
+                   "shift_video": SHIFT_VIDEO, "shift_audio": SHIFT_AUDIO},
+    }
+    model_src = "51"
     wf["50"] = {
         "class_type": "SolAttnPatch",
         "inputs": {
@@ -293,12 +329,12 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
     wf["6"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}}
     wf["7"] = {
         "class_type": "KSamplerSelect",
-        "inputs": {"sampler_name": "euler" if turbo else "res_multistep"},
+        "inputs": {"sampler_name": "euler" if turbo_lora else "res_multistep"},
     }
     wf["8"] = {
         "class_type": "BasicScheduler",
         "inputs": {"model": ["50", 0], "scheduler": "simple",
-                   "steps": TURBO_STEPS if turbo else STEPS, "denoise": 1.0},
+                   "steps": turbo_steps if turbo_lora else STEPS, "denoise": 1.0},
     }
     wf["9"] = {
         "class_type": "BasicGuider",
@@ -354,7 +390,9 @@ def _fl2va_graph(prompt: str, width: int, height: int, frames: int, seed: int,
         wf["11"] = {"class_type": "LoadImage", "inputs": {"image": last_frame}}
         cond_inputs["last_frame"] = ["11", 0]
     wf["5"] = {"class_type": "MiniMaxH3ImageToVideo", "inputs": cond_inputs}
-    _sampling_stack(wf, "5", ("5", 1), seed, turbo=TURBO)
+    _sampling_stack(wf, "5", ("5", 1), seed,
+                    turbo_lora=TURBO_LORA if TURBO else None,
+                    turbo_steps=TURBO_STEPS)
     return wf
 
 
@@ -392,7 +430,9 @@ def _ref2va_graph(prompt: str, width: int, height: int, frames: int, seed: int,
         wf[nid] = {"class_type": "LoadAudio", "inputs": {"audio": fn}}
         cond_inputs[f"ref_audios.ref_audio_{i}"] = [nid, 0]
     wf["5"] = {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": cond_inputs}
-    _sampling_stack(wf, "5", ("5", 1), seed)
+    _sampling_stack(wf, "5", ("5", 1), seed,
+                    turbo_lora=TURBO_REF_LORA if TURBO_REF else None,
+                    turbo_steps=TURBO_REF_STEPS)
     return wf
 
 
@@ -495,13 +535,15 @@ class Inference:
                 "  text_encoders: text_encoders\n"
                 "  loras: loras\n"
             )
-        if TURBO and not os.path.isfile(
-            os.path.join(COMFY_MODELS, "loras", TURBO_LORA)
-        ):
-            raise RuntimeError(
-                f"H3_TURBO=1 but loras/{TURBO_LORA} is missing from the models "
-                "volume — run `modal run download.py::download` first"
-            )
+        for flag, name, lora in (("H3_TURBO", TURBO, TURBO_LORA),
+                                 ("H3_TURBO_REF", TURBO_REF, TURBO_REF_LORA)):
+            if name and not os.path.isfile(
+                os.path.join(COMFY_MODELS, "loras", lora)
+            ):
+                raise RuntimeError(
+                    f"{flag}=1 but loras/{lora} is missing from the models "
+                    "volume — run `modal run download.py::download` first"
+                )
         self._logfh = open(COMFY_LOG, "wb")
         self.proc = subprocess.Popen(
             [
@@ -539,8 +581,11 @@ class Inference:
                 )
         print(
             f"[h3-timing] comfy {COMFY_TAG} ready in {time.monotonic() - t0:.0f}s "
-            f"(gpu={GPU} te={TE_VARIANT} steps={STEPS} turbo="
-            + (f"on/{TURBO_STEPS}step/{TURBO_LORA}" if TURBO else "off")
+            f"(gpu={GPU} te={TE_VARIANT} steps={STEPS} "
+            f"shift={SHIFT_VIDEO:g}/{SHIFT_AUDIO:g} turbo="
+            + (f"on/{TURBO_STEPS}step" if TURBO else "off")
+            + " turbo_ref="
+            + (f"on/{TURBO_REF_STEPS}step" if TURBO_REF else "off")
             + ") — weights load lazily on the first graph",
             flush=True,
         )
@@ -604,7 +649,9 @@ class Inference:
     def _ref2va(self, text, width, height, frames, seed,
                 images: list[bytes], videos: list[bytes], audios: list) -> tuple:
         w, h = _canvas(width, height)
-        print(f"[h3-timing] request ref2va {w}x{h} {frames}f steps={STEPS} "
+        print(f"[h3-timing] request ref2va {w}x{h} {frames}f "
+              f"steps={TURBO_REF_STEPS if TURBO_REF else STEPS} "
+              f"turbo_ref={TURBO_REF} "
               f"refs={len(images)}i/{len(videos)}v/{len(audios)}a", flush=True)
         image_files = [
             self._write_input(f"ref_img_{i}.png", b) for i, b in enumerate(images)

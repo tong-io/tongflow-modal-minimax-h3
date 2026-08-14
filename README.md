@@ -28,6 +28,22 @@ MiniMax's hosted prompt rewriter (H3-Context-IR) is not open source, so prompts
 pass through verbatim — write detailed, cinematic prompts including dialogue /
 sound cues; `enhance_prompt` is accepted and ignored.
 
+**Prompt structure** (the format LightX2V documents for H3; freeform prompts
+also work, but this is what the model was tuned on):
+
+```text
+integrated_multimodal_description: [Shot 1] Visual style, subject, action,
+camera, lighting, and dialogue for each shot.
+
+overall_soundscape: Dialogue, ambient sound, and synchronized effects.
+
+non_diegetic_music: Background score, or N/A for none.
+```
+
+Dialogue is written as `<d>[English] Line of dialogue.</d>`. For I2V,
+keep first-frame identity with e.g. `at 0.00 seconds into the target video,
+<Picture 1> (from [Shot 1]) is fully referenced.`
+
 ## Constraints
 
 - Duration is clamped to the trained range **~5.2–15.1 s** (frame grid `17k+5`
@@ -50,6 +66,7 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `vae/minimax_h3_video_vae_fp16.safetensors` | 5.2 GB |
 | `vae/minimax_h3_audio_vae_fp32.safetensors` | 0.6 GB |
 | `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | 2.0 GB |
+| `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 2.0 GB |
 
 Default GPU is **B200** ($6.25/h on Modal) with the NVFP4 text encoder — the
 fastest option, at only ~12% more per clip than the budget RTX-PRO-6000
@@ -80,14 +97,18 @@ lower it for faster drafts), `H3_STEPS` (20), and the FL2VA turbo family:
 at `H3_TURBO_STEPS` (8) plain Euler — ~2.5× fewer sampling steps),
 `H3_TURBO_LORA`, `H3_TURBO_STRENGTH` (1.0).
 
-**Turbo scope & status:** FL2VA slots only (`text-gen-video`,
-`image-gen-video`, `image-image-gen-video`). Ref2VA slots — including the
-default `refs-gen-video` — always run the un-distilled 20-step path; no Ref2VA
-distill exists yet (LightX2V roadmap item 2). v1.0 shipped 2026-08-11 with
-native-ComfyUI-format weights; **A/B the same seed against `H3_TURBO=0` before
-leaving it on** (known distill trade-off: quiet/sustained vocals degrade
-first). The 4-step 768p variant needs video shift 6 — not wired up; stick to
-the 8-step model, whose 12/3 training shifts match H3's native schedule.
+**Turbo scope & status:** `H3_TURBO=1` covers the FL2VA slots
+(`text-gen-video`, `image-gen-video`, `image-image-gen-video`) with the 8-step
+v1.0 LoRA (shipped 2026-08-11). `H3_TURBO_REF=1` separately covers the Ref2VA
+slots — including the default `refs-gen-video` — with the **Ref2VA Turbo
+4-step v0.1** LoRA (shipped 2026-08-13; a generation younger, and upstream's
+example pairs it with the full bf16 base rather than our pruned int8, so treat
+it as experimental). **A/B the same seed against the un-distilled path before
+leaving either on** (known distill trade-off: quiet/sustained vocals degrade
+first). Both graphs carry an explicit `MiniMaxH3SigmaShift` (`H3_SHIFT_VIDEO`
+12 / `H3_SHIFT_AUDIO` 3 = native defaults), so the fl2v 768p 4-step variant is
+one env change away (`H3_SHIFT_VIDEO=6` + `H3_TURBO_LORA=...768p...` +
+`H3_TURBO_STEPS=4`).
 
 ## Test runbook (run these yourself — every step below bills Modal)
 
