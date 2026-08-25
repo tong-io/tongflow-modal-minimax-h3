@@ -159,8 +159,17 @@ Kill criteria:
 - **Speed**: steady-state 5 s clip > ~10 min generation (≈ $1+/clip, 15 s
   extrapolates to ≳ 40 min) → impractical; consider the MiniMax API route
   instead. Target zone: 5 s clip ≤ 5 min.
-- Also confirm the mp4 has audio: `ffprobe out.mp4` → one video + one stereo
-  audio stream (or just play it).
+- Also confirm the mp4 has **real** audio, not just an audio stream. A present
+  but constant-DC / silent track is a known upstream failure mode (#15799),
+  and it also breaks the `SaveVideo` mux on some setups:
+
+  ```bash
+  ffprobe out.mp4                      # expect 1 video + 1 stereo audio stream
+  ffmpeg -i out.mp4 -af volumedetect -f null -   # mean_volume must not be -inf
+  ```
+
+  `mean_volume: -inf dB` (silence) or `max_volume: 0.0 dB` with zero dynamic
+  range (full-scale DC) means the audio VAE path is broken, not the prompt.
 
 ### 4. Remaining slots, one clip each
 
