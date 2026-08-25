@@ -199,11 +199,25 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 ## Known gaps / notes
 
-- ComfyUI is pinned to **v0.32.0** (first release bundling every post-launch
-  H3 fix: the ModelSamplingAV audio protocol switch #15243, VAE optimization
-  #15446, VAEDecodeTiled crash #15477, peak-memory fix #15486). The audio
-  sampling semantics changed vs the previous v0.30.0 pin — A/B one clip's
-  audio after upgrading. Sol-Attn is pinned to its 2026-08-08 commit.
+- **ComfyUI is pinned to a master commit (`924743af`), not a release tag**, and
+  the image build deletes one upstream line. Both are deliberate:
+  - `924743af` is kijai's tokenizer fix (#15808). H3's `tokenizer_config`
+    declares 7 special tokens (`<d>`, `</d>`, `<|cutoff|>`, `<|lyrics_*|>`,
+    `<|caption_*|>`) that are missing from `tokenizer.json`, so before it
+    `<d>` was tokenized as three ordinary characters and dialogue markup
+    silently did nothing. **No release tag carries this fix** — v0.33.2/.3/.4
+    are Partner-Node backports that touch no H3 core file.
+  - The build then deletes `v = v.clone()` from
+    `comfy/ldm/minimax/model.py`. That line (from the peak-memory fix #15486)
+    detaches `v` from the fused qkv buffer but keeps the `[seq, heads, dim]`
+    layout, so attention backends get a transposed view and fall off the fast
+    path — ~4x slower at full resolution (#15665, still open; fix PR #15705
+    was closed unmerged). The build greps before patching, so an upstream fix
+    fails the build loudly instead of silently no-oping.
+  - Audio sampling semantics changed vs the original v0.30.0 pin — **A/B one
+    clip's audio after upgrading**, and check the track is not constant-DC or
+    silent (#15799 reports that on some setups).
+  - Sol-Attn is pinned to its 2026-08-08 commit.
 - The Ref2VA graph wires references via ComfyUI autogrow inputs
   (`ref_images.ref_image_0` …) — validated against the v0.30.0 template
   serialization, but the first live run is the real test (a rejection error

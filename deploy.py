@@ -23,9 +23,13 @@ SolAttnPatch: RandomNoise / res_multistep / simple x20 / BasicGuider /
 SamplerCustomAdvanced, then VAEDecode + VAEDecodeAudio -> CreateVideo -> SaveVideo).
 
 Prompting: Ref2VA prompts address references as <Picture i> / <Video k> /
-<Audio j> (1-based, in connection order). H3-Context-IR (MiniMax's hosted
-prompt rewriter) is not open source, so prompts are passed through verbatim;
-``enhance_prompt`` is accepted and ignored.
+<Audio j> (1-based, in connection order); dialogue uses <d>[Lang] ...</d>.
+H3-Context-IR (MiniMax's hosted prompt rewriter) is not open source, so
+prompts are passed through verbatim; ``enhance_prompt`` is accepted and
+ignored.
+
+ComfyUI is pinned to a master commit rather than a release tag, and the image
+build patches out one upstream line — see COMFY_COMMIT below for why.
 
 Env knobs (all optional, read at deploy time — re-deploy after changing):
   H3_GPU                   default "B200" (fastest: 10 s = 10m04 / $1.05).
@@ -92,11 +96,16 @@ from tongflow.protocol import asset, prompt_media_to_bytes
 from tongflow.slots import node_slot
 
 COMFY = "/opt/ComfyUI"
-# v0.32.0 collects every post-release H3 fix: audio sampler protocol switch to
-# ModelSamplingAV (#15243), audio-VAE full offload (#15377), noise mask
-# (#15322), VAE optimization (#15446), VAEDecodeTiled crash (#15477), and the
-# peak-memory fix (#15486). (v0.30.0 was the first release with the H3 nodes.)
-COMFY_TAG = "v0.32.0"
+# Pinned to the master commit that lands kijai's tokenizer fix (#15808): H3's
+# tokenizer_config declares 7 extra special tokens (<d>, </d>, <|cutoff|>,
+# <|lyrics_*|>, <|caption_*|>) that are absent from tokenizer.json, so before
+# this commit `<d>` was tokenized as three ordinary characters and dialogue
+# markup silently did nothing. No release tag carries it: v0.33.2/.3/.4 are
+# backports of Partner Nodes only and touch no H3 core file.
+# Also included since v0.32.0: ModelSamplingAV audio protocol (#15243),
+# audio-VAE offload (#15377), VAE optimization (#15446), VAEDecodeTiled crash
+# (#15477), peak memory (#15486), per-token AV noise masks (#15375), taeh3.
+COMFY_COMMIT = "924743af083c151296cc16f925aeab113b6484e8"
 # Pin Sol-Attn: repo has no tags and moves fast; this is the 2026-08-08
 # "Fixes and optimizations" commit, after ComfyUI's H3 audio protocol switch.
 SOLATTN_COMMIT = "842c4eaa7d91"
@@ -179,8 +188,22 @@ image = (
         extra_index_url="https://download.pytorch.org/whl/cu128",
     )
     .run_commands(
-        f"git clone --depth 1 --branch {COMFY_TAG} "
-        f"https://github.com/comfyanonymous/ComfyUI.git {COMFY}",
+        # Shallow-fetch the pinned commit (a SHA, so --branch cannot be used).
+        f"git init {COMFY} && "
+        f"git -C {COMFY} remote add origin "
+        f"https://github.com/comfyanonymous/ComfyUI.git && "
+        f"git -C {COMFY} fetch --depth 1 origin {COMFY_COMMIT} && "
+        f"git -C {COMFY} checkout FETCH_HEAD",
+        # Drop the defensive `v = v.clone()` added by the peak-memory fix
+        # (#15486). It detaches v from the fused qkv buffer but keeps the
+        # [seq, heads, dim] layout, so the attention backend receives a
+        # transposed view and falls off its fast path: ~4x slower at full
+        # resolution (#15665, open; the fix PR #15705 was closed unmerged).
+        # Grep first so an upstream fix breaks the build loudly instead of
+        # silently no-oping this patch.
+        f"grep -qx '        v = v.clone()' {COMFY}/comfy/ldm/minimax/model.py && "
+        f"sed -i '/^        v = v.clone()$/d' {COMFY}/comfy/ldm/minimax/model.py && "
+        f"! grep -q 'v = v.clone()' {COMFY}/comfy/ldm/minimax/model.py",
         f"pip install -r {COMFY}/requirements.txt",
         "pip install --upgrade 'triton>=3.3' --no-deps",
         f"git clone https://github.com/kijai/ComfyUI-SolAttn_triton.git "
@@ -577,10 +600,11 @@ class Inference:
         for cls in ("MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo"):
             if cls not in info:
                 raise RuntimeError(
-                    f"{cls} missing from ComfyUI {COMFY_TAG} — bump COMFY_TAG"
+                    f"{cls} missing from ComfyUI {COMFY_COMMIT[:12]} — bump COMFY_COMMIT"
                 )
         print(
-            f"[h3-timing] comfy {COMFY_TAG} ready in {time.monotonic() - t0:.0f}s "
+            f"[h3-timing] comfy {COMFY_COMMIT[:12]} ready in "
+            f"{time.monotonic() - t0:.0f}s "
             f"(gpu={GPU} te={TE_VARIANT} steps={STEPS} "
             f"shift={SHIFT_VIDEO:g}/{SHIFT_AUDIO:g} turbo="
             + (f"on/{TURBO_STEPS}step" if TURBO else "off")
