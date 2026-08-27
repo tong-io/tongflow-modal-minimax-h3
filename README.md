@@ -8,6 +8,10 @@ served from headless ComfyUI (native H3 nodes, no custom node packs) on
 [Comfy-Org optimized weights](https://huggingface.co/Comfy-Org/MiniMax-H3)
 (pruned int8 ConvRot, ~63 GB total instead of 498 GB full precision).
 
+Runs entirely inside **your own** Modal account. See
+[When to use this plugin](#when-to-use-this-plugin) before adopting it — for
+plain speed or cost, fal's hosted H3 Max wins outright.
+
 ## Slots
 
 | Slot | H3 mode | Inputs |
@@ -68,26 +72,51 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | 2.0 GB |
 | `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 2.0 GB |
 
-Default GPU is **B200** ($6.25/h on Modal) with the NVFP4 text encoder — the
-fastest option, at only ~12% more per clip than the budget RTX-PRO-6000
-(Blackwell runs the int8-convrot/NVFP4 kernels ~2× faster than Hopper, so
-Hopper cards lose on both axes). Measured / estimated per clip at native 768p:
+### When to use this plugin
 
-| GPU | 5 s clip | 10 s clip | 15 s clip | Notes |
-|---|---|---|---|---|
-| **B200 $6.25/h (default)** | **4 m 17 s ($0.45) ✓** | **10 m 04 s ($1.05) ✓** | ~18–22 min | fastest; both checkpoints resident in 192 GB |
-| RTX-PRO-6000 $3.03/h | ~7–8 min (~$0.39) | **18 m 11 s ($0.92) ✓** | ~33–37 min (~$1.75) | budget option: ~45% slower, ~12% cheaper per clip; Blackwell 96 GB, nvfp4 native |
-| H100 $3.95/h + int8 TE | ~10 min | **20 m 25 s ($1.34) ✓** | ~35–40 min | dominated by RTX-PRO-6000 (slower and pricier) |
-| A100-80GB $2.50/h + int8 TE | ~15 min | >40 min (aborted) ✓ | ⚠️ times out | not recommended |
+Self-hosting H3 is **not the cheap or the fast way to generate video**, and this
+plugin should not be picked on either of those grounds. fal serves *H3 Max* —
+their post-trained H3 — through the
+[fal router plugin](https://github.com/tong-io/tongflow-router-fal) at
+**$0.08/s of output** with native audio, returning a 5 s 768p clip in about
+3 seconds. That is roughly the same price as a self-hosted clip and ~100×
+faster, from a model that scores better than stock H3.
 
-(✓ = measured, 2026-08-03/04.) Full attention scales superlinearly with
-duration; MiniMax's unreleased sparse attention is the long-clip fix — we'll
-adopt it when it lands.
+Reach for self-hosting when one of these is the point:
 
-One checkpoint + text encoder + VAEs fit in 80 GB; on A100/H100 switching
+- **Data residency** — inputs and outputs never leave your own Modal account.
+- **No third-party dependency** — no per-account rate limits, no vendor
+  deprecating an endpoint out from under a saved workflow.
+- **Modal's $30/month free credit** — a general GPU allowance shared across
+  *every* official Modal plugin, not just this one. Around 35–40 ten-second
+  clips a month land inside it.
+- **The full Ref2VA surface** — `refs-gen-video` mixes up to 9 images, 3 videos
+  and 3 audio clips in one context. fal's reference-to-video endpoint is
+  announced but not shipped as of 2026-08-27.
+
+### Picking a GPU (once you've decided to self-host)
+
+Default is **B200** ($6.25/h) with the NVFP4 text encoder. Blackwell runs the
+int8-convrot / NVFP4 kernels ~2× faster than Hopper, so Hopper cards lose on
+both price and speed; the real choice is B200 vs RTX-PRO-6000.
+
+| GPU | 10 s clip | Notes |
+|---|---|---|
+| **B200 $6.25/h (default)** | **7 m 32 s (~$0.78) ✓** | fastest; both checkpoints resident in 192 GB |
+| RTX-PRO-6000 $3.03/h | 18 m 11 s ($0.92) ✓ | ~45% slower and, at these rates, no longer cheaper per clip; Blackwell 96 GB, nvfp4 native |
+| H100 $3.95/h + int8 TE | 20 m 25 s ($1.34) ✓ | dominated on both axes |
+| A100-80GB $2.50/h + int8 TE | >40 min (aborted) ✓ | not recommended; 15 s times out |
+
+(✓ = measured. B200 re-measured 2026-08-25 on the current pin — the earlier
+10 m 04 s / $1.05 figure was v0.30.0. The others are still v0.30.0-era and
+should be re-measured before being trusted.) A 5 s clip runs roughly 2.3×
+faster than a 10 s one and 15 s roughly 2× slower: full attention scales
+superlinearly with duration, and MiniMax's sparse-attention implementation —
+promised, unreleased — is the real fix for long clips.
+
+One checkpoint + text encoder + VAEs fit in 80 GB; on A100/H100, switching
 between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
-seconds). MiniMax's sparse-attention implementation (not yet released) is the
-real fix for long clips — we'll adopt it when it lands.
+seconds).
 
 Env knobs (TongFlow Settings; deploy-time — see "Applying env changes" below):
 `H3_GPU` (B200), `H3_TEXT_ENCODER_VARIANT` (nvfp4|int8), `H3_SHORT_EDGE` (768;
