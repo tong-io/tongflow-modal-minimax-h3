@@ -71,6 +71,7 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `vae/minimax_h3_audio_vae_fp32.safetensors` | 0.6 GB |
 | `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | 2.0 GB |
 | `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 2.0 GB |
+| `loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` | 2.0 GB |
 
 ### When to use this plugin
 
@@ -134,10 +135,16 @@ slots — including the default `refs-gen-video` — with the **Ref2VA Turbo
 example pairs it with the full bf16 base rather than our pruned int8, so treat
 it as experimental). **A/B the same seed against the un-distilled path before
 leaving either on** (known distill trade-off: quiet/sustained vocals degrade
-first). Both graphs carry an explicit `MiniMaxH3SigmaShift` (`H3_SHIFT_VIDEO`
-12 / `H3_SHIFT_AUDIO` 3 = native defaults), so the fl2v 768p 4-step variant is
-one env change away (`H3_SHIFT_VIDEO=6` + `H3_TURBO_LORA=...768p...` +
-`H3_TURBO_STEPS=4`).
+first).
+
+The FL2VA default is the **768p-trained** 8-step build (shipped 2026-08-27):
+same distillation NFE as the original 8-step LoRA but trained at 1344×768,
+which is exactly this plugin's output canvas, so nothing is extrapolated from
+544p. Both graphs carry an explicit `MiniMaxH3SigmaShift`, and the shift pair
+is **derived from the active LoRA** — 6/3 for the 768p-trained variants, 12/3
+(H3 native) for everything else, including the Ref2VA LoRA and the
+un-distilled path. `H3_SHIFT_VIDEO` / `H3_SHIFT_AUDIO` override that, and are
+only needed for a LoRA `deploy.py` does not know about.
 
 ## Test runbook (run these yourself — every step below bills Modal)
 

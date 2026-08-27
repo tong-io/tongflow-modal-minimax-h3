@@ -63,9 +63,11 @@ Env knobs (all optional, read at deploy time — re-deploy after changing):
                            base, not our pruned int8 — A/B before enabling.
   H3_TURBO_REF_STEPS       Ref2VA turbo steps, default 4 (distill NFE).
   H3_TURBO_REF_LORA        Ref2VA LoRA filename, must match download.py.
-  H3_SHIFT_VIDEO           video sigma shift, default 12 (H3 native); the
-  H3_SHIFT_AUDIO           audio shift, default 3. Set video=6 for the
-                           fl2v 768p 4-step LoRA variant.
+  H3_SHIFT_VIDEO           override the video sigma shift. Unset, it is
+  H3_SHIFT_AUDIO           derived per graph from the active LoRA: 6/3 for
+                           the 768p-trained variants, 12/3 (H3 native) for
+                           everything else. Only set these to try a LoRA
+                           this file does not know about.
 
 Deploy:           modal deploy deploy.py
 Download weights: modal run download.py::download
@@ -126,7 +128,7 @@ TURBO = (os.environ.get("H3_TURBO") or "").strip().lower() in ("1", "true", "on"
 TURBO_STEPS = int(os.environ.get("H3_TURBO_STEPS") or 8)
 TURBO_LORA = (
     os.environ.get("H3_TURBO_LORA")
-    or "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+    or "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
 ).strip()
 TURBO_STRENGTH = float(os.environ.get("H3_TURBO_STRENGTH") or 1.0)
 # Ref2VA Turbo (LightX2V Ref2VA 4-step v0.1, 2026-08-13). Separate knob from
@@ -142,11 +144,30 @@ TURBO_REF_LORA = (
     os.environ.get("H3_TURBO_REF_LORA")
     or "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
 ).strip()
-# Explicit AV sigma shifts on the sampling model, mirroring the official
-# LightX2V workflows (MiniMaxH3SigmaShift 12/3 = H3 native defaults; the
-# fl2v 768p 4-step variant needs H3_SHIFT_VIDEO=6).
-SHIFT_VIDEO = float(os.environ.get("H3_SHIFT_VIDEO") or 12.0)
-SHIFT_AUDIO = float(os.environ.get("H3_SHIFT_AUDIO") or 3.0)
+# AV sigma shifts, set on the sampling model via MiniMaxH3SigmaShift like the
+# official LightX2V workflows. These are a property of the active LoRA, not a
+# global: the 768p variants were distilled on a shift-6 video schedule while
+# H3's own default and every 544p-trained LoRA use 12. Mismatching them
+# degrades motion, so derive the pair per graph and let the env force it only
+# when explicitly set.
+NATIVE_SHIFTS = (12.0, 3.0)
+_LORA_SHIFTS = {
+    "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors": (6.0, 3.0),
+    "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors": (6.0, 3.0),
+    "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors": (6.0, 3.0),
+}
+_SHIFT_VIDEO_ENV = os.environ.get("H3_SHIFT_VIDEO")
+_SHIFT_AUDIO_ENV = os.environ.get("H3_SHIFT_AUDIO")
+
+
+def _shifts(lora: Optional[str]) -> tuple[float, float]:
+    """(video, audio) shift for the graph, env override winning."""
+    video, audio = _LORA_SHIFTS.get(lora or "", NATIVE_SHIFTS)
+    if _SHIFT_VIDEO_ENV:
+        video = float(_SHIFT_VIDEO_ENV)
+    if _SHIFT_AUDIO_ENV:
+        audio = float(_SHIFT_AUDIO_ENV)
+    return video, audio
 
 FL2VA_UNET = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
 REF2VA_UNET = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
@@ -321,12 +342,11 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
             },
         }
         model_src = "49"
-    # Explicit AV shifts (12/3 = native defaults; kept in the graph so variants
-    # like the fl2v 768p 4-step model, shift 6/3, are one env change away).
+    shift_video, shift_audio = _shifts(turbo_lora)
     wf["51"] = {
         "class_type": "MiniMaxH3SigmaShift",
         "inputs": {"model": [model_src, 0],
-                   "shift_video": SHIFT_VIDEO, "shift_audio": SHIFT_AUDIO},
+                   "shift_video": shift_video, "shift_audio": shift_audio},
     }
     model_src = "51"
     wf["50"] = {
@@ -606,7 +626,8 @@ class Inference:
             f"[h3-timing] comfy {COMFY_COMMIT[:12]} ready in "
             f"{time.monotonic() - t0:.0f}s "
             f"(gpu={GPU} te={TE_VARIANT} steps={STEPS} "
-            f"shift={SHIFT_VIDEO:g}/{SHIFT_AUDIO:g} turbo="
+            f"shift=fl2va{_shifts(TURBO_LORA if TURBO else None)[0]:g}"
+            f"/ref2va{_shifts(TURBO_REF_LORA if TURBO_REF else None)[0]:g} turbo="
             + (f"on/{TURBO_STEPS}step" if TURBO else "off")
             + " turbo_ref="
             + (f"on/{TURBO_REF_STEPS}step" if TURBO_REF else "off")

@@ -83,6 +83,16 @@ MODELS = [
         "loras",
         "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
     ),
+    # 768p-trained FL2VA build (2026-08-27): same 8 distillation steps as the
+    # 544p one but trained at 1344x768, which is exactly this plugin's output
+    # canvas, so no resolution extrapolation. Needs video shift 6 — deploy.py
+    # derives that from the filename. This is the H3_TURBO default.
+    (
+        "lightx2v/Minimax-h3-Turbo",
+        "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+        "loras",
+        "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+    ),
 ]
 
 volume_name = str(_cfg.get("volumeName") or "models")
