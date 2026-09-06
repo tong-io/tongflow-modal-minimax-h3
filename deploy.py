@@ -63,6 +63,15 @@ Env knobs (all optional, read at deploy time — re-deploy after changing):
                            base, not our pruned int8 — A/B before enabling.
   H3_TURBO_REF_STEPS       Ref2VA turbo steps, default 4 (distill NFE).
   H3_TURBO_REF_LORA        Ref2VA LoRA filename, must match download.py.
+  H3_PDD                   "1" to run BOTH FL2VA and Ref2VA slots with the
+                           Alibaba PAI PDD Acc LoRAs at 8 NFE — the only
+                           8-step option for the default refs-gen-video slot.
+                           Mutually exclusive with H3_TURBO / H3_TURBO_REF
+                           (distillations do not stack); setting both raises
+                           at deploy time.
+  H3_PDD_STEPS             PDD sampling steps, default 8 (distillation NFE).
+  H3_PDD_FL2VA_LORA        PDD LoRA filenames, must match download.py.
+  H3_PDD_REF2VA_LORA
   H3_SHIFT_VIDEO           override the video sigma shift. Unset, it is
   H3_SHIFT_AUDIO           derived per graph from the active LoRA: 6/3 for
                            the 768p-trained variants, 12/3 (H3 native) for
@@ -98,16 +107,22 @@ from tongflow.protocol import asset, prompt_media_to_bytes
 from tongflow.slots import node_slot
 
 COMFY = "/opt/ComfyUI"
-# Pinned to the master commit that lands kijai's tokenizer fix (#15808): H3's
-# tokenizer_config declares 7 extra special tokens (<d>, </d>, <|cutoff|>,
-# <|lyrics_*|>, <|caption_*|>) that are absent from tokenizer.json, so before
-# this commit `<d>` was tokenized as three ordinary characters and dialogue
-# markup silently did nothing. No release tag carries it: v0.33.2/.3/.4 are
-# backports of Partner Nodes only and touch no H3 core file.
-# Also included since v0.32.0: ModelSamplingAV audio protocol (#15243),
-# audio-VAE offload (#15377), VAE optimization (#15446), VAEDecodeTiled crash
-# (#15477), peak memory (#15486), per-token AV noise masks (#15375), taeh3.
-COMFY_COMMIT = "924743af083c151296cc16f925aeab113b6484e8"
+# Pinned to a master commit, not a release tag: the v0.33.x/v0.34.x tags are
+# narrow backports that carry the tokenizer fix but none of the H3 work below,
+# and the last published release is v0.34.0.
+#   #15808  tokenizer special tokens — H3's tokenizer_config declares <d>,
+#           </d>, <|cutoff|>, <|lyrics_*|>, <|caption_*|> but tokenizer.json
+#           does not, so `<d>` used to tokenize as three ordinary characters
+#           and dialogue markup silently did nothing.
+#   #15908  PDD acceleration LoRAs (see the H3_PDD block below).
+#   #15975  Fun ControlNet as a model patch, #16020 lets it coexist with
+#           reference conditioning (unused here so far).
+#   #16065  VAE optional / text-encoder-only references.
+#   #16103  removes the `v = v.clone()` memory workaround that cost up to 4x
+#           at full resolution (#15665). We used to delete that line at build
+#           time; upstream deleted it here, so the build now asserts it stays
+#           gone instead of patching it out.
+COMFY_COMMIT = "15eb748b3ec5f8a0a2d470b7fb280e2d7579f916"
 # Pin Sol-Attn: repo has no tags and moves fast; this is the 2026-08-08
 # "Fixes and optimizations" commit, after ComfyUI's H3 audio protocol switch.
 SOLATTN_COMMIT = "842c4eaa7d91"
@@ -144,6 +159,36 @@ TURBO_REF_LORA = (
     os.environ.get("H3_TURBO_REF_LORA")
     or "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
 ).strip()
+# PDD (Parallel Decoding Distillation) acceleration LoRAs from Alibaba PAI
+# (alibaba-pai/MiniMax-H3-Acc-LoRAs, 2026-08-26), 8 NFE for BOTH FL2VA and
+# Ref2VA — the first 8-step option for our default refs-gen-video slot, where
+# LightX2V still only ships a 4-step v0.1.
+#
+# These are not ordinary LoRAs: a rank-64 backbone update ships alongside a
+# 32-interval bank of output heads, and each sampler step consumes the
+# dt-weighted mean of the heads it spans. ComfyUI detects the bank from the
+# [N*out, in] weight shape (#15908), so the stock LoraLoaderModelOnly loads
+# them, but two things must hold: the sampler has to hand the model its sigma
+# schedule (SamplerCustomAdvanced does), and the graph must keep H3's native
+# 12/3 shifts, because the bank's interval grid was built against them.
+#
+# Distillations do not stack — PDD is mutually exclusive with H3_TURBO*.
+PDD = (os.environ.get("H3_PDD") or "").strip().lower() in ("1", "true", "on")
+PDD_STEPS = int(os.environ.get("H3_PDD_STEPS") or 8)
+PDD_FL2VA_LORA = (
+    os.environ.get("H3_PDD_FL2VA_LORA")
+    or "MiniMax-H3-FL2VA-Acc-8Step_pruned_comfy.safetensors"
+).strip()
+PDD_REF2VA_LORA = (
+    os.environ.get("H3_PDD_REF2VA_LORA")
+    or "MiniMax-H3-Ref2VA-Acc-8Step_pruned_comfy.safetensors"
+).strip()
+if PDD and (TURBO or TURBO_REF):
+    raise RuntimeError(
+        "H3_PDD cannot be combined with H3_TURBO / H3_TURBO_REF: distillations "
+        "do not stack. Pick one acceleration family and re-deploy."
+    )
+
 # AV sigma shifts, set on the sampling model via MiniMaxH3SigmaShift like the
 # official LightX2V workflows. These are a property of the active LoRA, not a
 # global: the 768p variants were distilled on a shift-6 video schedule while
@@ -155,6 +200,11 @@ _LORA_SHIFTS = {
     "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors": (6.0, 3.0),
     "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors": (6.0, 3.0),
     "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors": (6.0, 3.0),
+    # PDD listed explicitly rather than left to the native fallback: its head
+    # bank indexes the interval grid by these very shifts, so a wrong pair
+    # silently blends the wrong heads instead of failing.
+    PDD_FL2VA_LORA: NATIVE_SHIFTS,
+    PDD_REF2VA_LORA: NATIVE_SHIFTS,
 }
 _SHIFT_VIDEO_ENV = os.environ.get("H3_SHIFT_VIDEO")
 _SHIFT_AUDIO_ENV = os.environ.get("H3_SHIFT_AUDIO")
@@ -215,15 +265,11 @@ image = (
         f"https://github.com/comfyanonymous/ComfyUI.git && "
         f"git -C {COMFY} fetch --depth 1 origin {COMFY_COMMIT} && "
         f"git -C {COMFY} checkout FETCH_HEAD",
-        # Drop the defensive `v = v.clone()` added by the peak-memory fix
-        # (#15486). It detaches v from the fused qkv buffer but keeps the
-        # [seq, heads, dim] layout, so the attention backend receives a
-        # transposed view and falls off its fast path: ~4x slower at full
-        # resolution (#15665, open; the fix PR #15705 was closed unmerged).
-        # Grep first so an upstream fix breaks the build loudly instead of
-        # silently no-oping this patch.
-        f"grep -qx '        v = v.clone()' {COMFY}/comfy/ldm/minimax/model.py && "
-        f"sed -i '/^        v = v.clone()$/d' {COMFY}/comfy/ldm/minimax/model.py && "
+        # Assert the `v = v.clone()` memory workaround is still gone. We used
+        # to delete it here (it cost up to 4x at full resolution, #15665);
+        # upstream removed it in #16103. Keeping the check turns a revert or a
+        # careless pin bump into a build failure rather than a silent
+        # regression that would only show up as a slow bill.
         f"! grep -q 'v = v.clone()' {COMFY}/comfy/ldm/minimax/model.py",
         f"pip install -r {COMFY}/requirements.txt",
         "pip install --upgrade 'triton>=3.3' --no-deps",
@@ -318,6 +364,19 @@ def _seed(value: object) -> int:
 
 
 _AUDIO_EXT = {"audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/flac": "flac"}
+
+
+def _accel(fl2va: bool) -> dict:
+    """Which distill LoRA (if any) this graph runs, and at how many steps.
+    PDD and turbo are mutually exclusive, enforced at import."""
+    if PDD:
+        return {"turbo_lora": PDD_FL2VA_LORA if fl2va else PDD_REF2VA_LORA,
+                "turbo_steps": PDD_STEPS}
+    if fl2va and TURBO:
+        return {"turbo_lora": TURBO_LORA, "turbo_steps": TURBO_STEPS}
+    if not fl2va and TURBO_REF:
+        return {"turbo_lora": TURBO_REF_LORA, "turbo_steps": TURBO_REF_STEPS}
+    return {"turbo_lora": None, "turbo_steps": 0}
 
 
 def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int,
@@ -433,9 +492,7 @@ def _fl2va_graph(prompt: str, width: int, height: int, frames: int, seed: int,
         wf["11"] = {"class_type": "LoadImage", "inputs": {"image": last_frame}}
         cond_inputs["last_frame"] = ["11", 0]
     wf["5"] = {"class_type": "MiniMaxH3ImageToVideo", "inputs": cond_inputs}
-    _sampling_stack(wf, "5", ("5", 1), seed,
-                    turbo_lora=TURBO_LORA if TURBO else None,
-                    turbo_steps=TURBO_STEPS)
+    _sampling_stack(wf, "5", ("5", 1), seed, **_accel(fl2va=True))
     return wf
 
 
@@ -473,9 +530,7 @@ def _ref2va_graph(prompt: str, width: int, height: int, frames: int, seed: int,
         wf[nid] = {"class_type": "LoadAudio", "inputs": {"audio": fn}}
         cond_inputs[f"ref_audios.ref_audio_{i}"] = [nid, 0]
     wf["5"] = {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": cond_inputs}
-    _sampling_stack(wf, "5", ("5", 1), seed,
-                    turbo_lora=TURBO_REF_LORA if TURBO_REF else None,
-                    turbo_steps=TURBO_REF_STEPS)
+    _sampling_stack(wf, "5", ("5", 1), seed, **_accel(fl2va=False))
     return wf
 
 
@@ -578,9 +633,11 @@ class Inference:
                 "  text_encoders: text_encoders\n"
                 "  loras: loras\n"
             )
-        for flag, name, lora in (("H3_TURBO", TURBO, TURBO_LORA),
-                                 ("H3_TURBO_REF", TURBO_REF, TURBO_REF_LORA)):
-            if name and not os.path.isfile(
+        for flag, on, lora in (("H3_TURBO", TURBO, TURBO_LORA),
+                               ("H3_TURBO_REF", TURBO_REF, TURBO_REF_LORA),
+                               ("H3_PDD", PDD, PDD_FL2VA_LORA),
+                               ("H3_PDD", PDD, PDD_REF2VA_LORA)):
+            if on and not os.path.isfile(
                 os.path.join(COMFY_MODELS, "loras", lora)
             ):
                 raise RuntimeError(
@@ -631,6 +688,7 @@ class Inference:
             + (f"on/{TURBO_STEPS}step" if TURBO else "off")
             + " turbo_ref="
             + (f"on/{TURBO_REF_STEPS}step" if TURBO_REF else "off")
+            + f" pdd={'on/' + str(PDD_STEPS) + 'step' if PDD else 'off'}"
             + ") — weights load lazily on the first graph",
             flush=True,
         )
@@ -683,8 +741,10 @@ class Inference:
                first: Optional[bytes], last: Optional[bytes]):
         w, h = _canvas(width, height)
         frames = _frames_from_duration(duration)
+        a = _accel(fl2va=True)
         print(f"[h3-timing] request fl2va {w}x{h} {frames}f "
-              f"steps={TURBO_STEPS if TURBO else STEPS} turbo={TURBO}", flush=True)
+              f"steps={a['turbo_steps'] or STEPS} "
+              f"lora={a['turbo_lora'] or 'none'}", flush=True)
         first_fn = self._write_input("first.png", first) if first else None
         last_fn = self._write_input("last.png", last) if last else None
         wf = _fl2va_graph((text or "").strip(), w, h, frames, _seed(seed),
@@ -694,9 +754,10 @@ class Inference:
     def _ref2va(self, text, width, height, frames, seed,
                 images: list[bytes], videos: list[bytes], audios: list) -> tuple:
         w, h = _canvas(width, height)
+        a = _accel(fl2va=False)
         print(f"[h3-timing] request ref2va {w}x{h} {frames}f "
-              f"steps={TURBO_REF_STEPS if TURBO_REF else STEPS} "
-              f"turbo_ref={TURBO_REF} "
+              f"steps={a['turbo_steps'] or STEPS} "
+              f"lora={a['turbo_lora'] or 'none'} "
               f"refs={len(images)}i/{len(videos)}v/{len(audios)}a", flush=True)
         image_files = [
             self._write_input(f"ref_img_{i}.png", b) for i, b in enumerate(images)
@@ -798,7 +859,7 @@ class Inference:
         w, h = _canvas(input.width, input.height)
         img_fn = self._write_input("ref_img_0.png", img)
         print(f"[h3-timing] request ref2va(audio-image) {w}x{h} {frames}f "
-              f"steps={STEPS}", flush=True)
+              f"steps={_accel(fl2va=False)['turbo_steps'] or STEPS}", flush=True)
         wf = _ref2va_graph(text, w, h, frames, 42, [img_fn], [], [aud_fn])
         ok, res = _submit_graph(self.base, wf)
         if ok:

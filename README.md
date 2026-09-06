@@ -72,6 +72,8 @@ Weights land on the shared `models` Modal volume under `/models/comfyui/`:
 | `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | 2.0 GB |
 | `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 2.0 GB |
 | `loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` | 2.0 GB |
+| `loras/MiniMax-H3-FL2VA-Acc-8Step_pruned_comfy.safetensors` | 1.7 GB |
+| `loras/MiniMax-H3-Ref2VA-Acc-8Step_pruned_comfy.safetensors` | 1.7 GB |
 
 ### When to use this plugin
 
@@ -136,6 +138,19 @@ example pairs it with the full bf16 base rather than our pruned int8, so treat
 it as experimental). **A/B the same seed against the un-distilled path before
 leaving either on** (known distill trade-off: quiet/sustained vocals degrade
 first).
+
+**`H3_PDD=1` is the other family** — Alibaba PAI's
+[PDD Acc LoRAs](https://huggingface.co/alibaba-pai/MiniMax-H3-Acc-LoRAs)
+(Parallel Decoding Distillation), **8 NFE for FL2VA *and* Ref2VA**. It is the
+only 8-step option for the default `refs-gen-video` slot, where LightX2V still
+ships just a 4-step v0.1. These are not ordinary LoRAs: a rank-64 backbone
+update ships with a 32-interval bank of output heads, and each sampler step
+consumes the dt-weighted mean of the heads it spans. ComfyUI detects the bank
+from the `[N*out, in]` weight shape (#15908) so the stock loader reads it, but
+the graph must keep H3's **native 12/3 shifts** — the bank indexes its interval
+grid by them, and a wrong pair blends the wrong heads silently. Distillations
+do not stack, so `H3_PDD` refuses to coexist with `H3_TURBO*` and raises at
+deploy time.
 
 The FL2VA default is the **768p-trained** 8-step build (shipped 2026-08-27):
 same distillation NFE as the original 8-step LoRA but trained at 1344×768,
@@ -244,24 +259,25 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 ## Known gaps / notes
 
-- **ComfyUI is pinned to a master commit (`924743af`), not a release tag**, and
-  the image build deletes one upstream line. Both are deliberate:
-  - `924743af` is kijai's tokenizer fix (#15808). H3's `tokenizer_config`
-    declares 7 special tokens (`<d>`, `</d>`, `<|cutoff|>`, `<|lyrics_*|>`,
-    `<|caption_*|>`) that are missing from `tokenizer.json`, so before it
-    `<d>` was tokenized as three ordinary characters and dialogue markup
-    silently did nothing. **No release tag carries this fix** — v0.33.2/.3/.4
-    are Partner-Node backports that touch no H3 core file.
-  - The build then deletes `v = v.clone()` from
-    `comfy/ldm/minimax/model.py`. That line (from the peak-memory fix #15486)
-    detaches `v` from the fused qkv buffer but keeps the `[seq, heads, dim]`
-    layout, so attention backends get a transposed view and fall off the fast
-    path — ~4x slower at full resolution (#15665, still open; fix PR #15705
-    was closed unmerged). The build greps before patching, so an upstream fix
-    fails the build loudly instead of silently no-oping.
-  - Audio sampling semantics changed vs the original v0.30.0 pin — **A/B one
-    clip's audio after upgrading**, and check the track is not constant-DC or
-    silent (#15799 reports that on some setups).
+- **ComfyUI is pinned to a master commit (`15eb748b`), not a release tag.**
+  The v0.33.x / v0.34.x tags are narrow backports that carry the tokenizer fix
+  but none of the H3 work below, and the last published release is v0.34.0:
+  - **#15808** tokenizer special tokens. H3's `tokenizer_config` declares
+    `<d>`, `</d>`, `<|cutoff|>`, `<|lyrics_*|>`, `<|caption_*|>` but
+    `tokenizer.json` does not, so `<d>` used to tokenize as three ordinary
+    characters and dialogue markup silently did nothing.
+  - **#15908** PDD acceleration LoRAs (see `H3_PDD` above).
+  - **#15975 / #16020** Fun ControlNet as a model patch, and letting it
+    coexist with reference conditioning. Not wired up here yet.
+  - **#16065** VAE optional / text-encoder-only references.
+  - **#16103** removes the `v = v.clone()` memory workaround, which cost up
+    to 4× at full resolution (#15665). This build used to delete that line
+    itself; now it only asserts the line stays gone, so a revert or a
+    careless pin bump fails the build instead of quietly returning a 4×
+    slower — and 4× more expensive — deploy.
+  - Audio sampling semantics changed back at the v0.30.0 → v0.32.0 move —
+    **A/B one clip's audio after upgrading**, and check the track is not
+    constant-DC or silent (#15799 reports that on some setups).
   - Sol-Attn is pinned to its 2026-08-08 commit.
 - The Ref2VA graph wires references via ComfyUI autogrow inputs
   (`ref_images.ref_image_0` …) — validated against the v0.30.0 template
