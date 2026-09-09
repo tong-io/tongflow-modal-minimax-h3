@@ -103,19 +103,21 @@ Default is **B200** ($6.25/h) with the NVFP4 text encoder. Blackwell runs the
 int8-convrot / NVFP4 kernels ~2× faster than Hopper, so Hopper cards lose on
 both price and speed; the real choice is B200 vs RTX-PRO-6000.
 
-| GPU | 10 s clip | Notes |
-|---|---|---|
-| **B200 $6.25/h (default)** | **7 m 32 s (~$0.78) ✓** | fastest; both checkpoints resident in 192 GB |
-| RTX-PRO-6000 $3.03/h | 18 m 11 s ($0.92) ✓ | ~45% slower and, at these rates, no longer cheaper per clip; Blackwell 96 GB, nvfp4 native |
-| H100 $3.95/h + int8 TE | 20 m 25 s ($1.34) ✓ | dominated on both axes |
-| A100-80GB $2.50/h + int8 TE | >40 min (aborted) ✓ | not recommended; 15 s times out |
+| GPU | 10 s clip | 15 s clip | Notes |
+|---|---|---|---|
+| **B200 $6.25/h (default)** | **6 m 52 s (~$0.72) ✓** | **11 m 24 s (~$1.19) ✓** | fastest; both checkpoints resident in 192 GB |
+| RTX-PRO-6000 $3.03/h | 18 m 11 s ($0.92) ✓ | — | ~45% slower and, at these rates, no longer cheaper per clip; Blackwell 96 GB, nvfp4 native |
+| H100 $3.95/h + int8 TE | 20 m 25 s ($1.34) ✓ | — | dominated on both axes |
+| A100-80GB $2.50/h + int8 TE | >40 min (aborted) ✓ | ⚠️ times out | not recommended |
 
-(✓ = measured. B200 re-measured 2026-08-25 on the current pin — the earlier
-10 m 04 s / $1.05 figure was v0.30.0. The others are still v0.30.0-era and
-should be re-measured before being trusted.) A 5 s clip runs roughly 2.3×
-faster than a 10 s one and 15 s roughly 2× slower: full attention scales
-superlinearly with duration, and MiniMax's sparse-attention implementation —
-promised, unreleased — is the real fix for long clips.
+(✓ = measured, un-distilled 20-step Ref2VA at 1344×768. The B200 row is from
+2026-09-09 on the current pin; dropping upstream's `v = v.clone()` bought ~9%
+over the 2026-08-25 measurement of the same clip. The other rows are still
+v0.30.0-era and should be re-measured before being trusted.) Duration scales
+close to linearly here — 362 frames costs 1.66× what 243 frames does, for
+1.49× the frames — so the earlier "15 s is ~2× a 10 s clip" estimate was
+pessimistic by nearly half. MiniMax's sparse-attention implementation
+(promised, unreleased) would still help most at the long end.
 
 One checkpoint + text encoder + VAEs fit in 80 GB; on A100/H100, switching
 between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
