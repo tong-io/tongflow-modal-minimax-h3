@@ -115,9 +115,8 @@ otherwise. `H3_PDD=1` was measured 2026-09-09 against the same seed, prompt and
 reference image: **226 s vs 418 s, 1.85×**, with the audio track intact
 (`max_volume −27.1 dB`, real dynamic range — not the constant-DC failure of
 #15799). The B200 row is from
-2026-09-09 on the current pin; dropping upstream's `v = v.clone()` bought ~9%
-over the 2026-08-25 measurement of the same clip. The other rows are still
-v0.30.0-era and should be re-measured before being trusted.) Duration scales
+2026-09-09 on the current pin. The other rows are still v0.30.0-era and should
+be re-measured before being trusted.) Duration scales
 close to linearly here — 362 frames costs 1.66× what 243 frames does, for
 1.49× the frames — so the earlier "15 s is ~2× a 10 s clip" estimate was
 pessimistic by nearly half. MiniMax's sparse-attention implementation
@@ -140,7 +139,8 @@ lower it for faster drafts), `H3_STEPS` (20), and the FL2VA turbo family:
 at `H3_TURBO_STEPS` (8) plain Euler — ~2.5× fewer sampling steps),
 `H3_TURBO_LORA`, `H3_TURBO_STRENGTH` (1.0).
 
-**Turbo scope & status:** `H3_TURBO=1` covers the FL2VA slots
+**Turbo scope & status** (the opt-in alternative to the PDD default):
+`H3_TURBO=1` covers the FL2VA slots
 (`text-gen-video`, `image-gen-video`, `image-image-gen-video`) with the 8-step
 v1.0 LoRA (shipped 2026-08-11). `H3_TURBO_REF=1` separately covers the Ref2VA
 slots — including the default `refs-gen-video` — with the **Ref2VA Turbo
@@ -150,7 +150,7 @@ it as experimental). **A/B the same seed against the un-distilled path before
 leaving either on** (known distill trade-off: quiet/sustained vocals degrade
 first).
 
-**`H3_PDD=1` is the other family** — Alibaba PAI's
+**`H3_PDD` is the default, and it is the other family** — Alibaba PAI's
 [PDD Acc LoRAs](https://huggingface.co/alibaba-pai/MiniMax-H3-Acc-LoRAs)
 (Parallel Decoding Distillation), **8 NFE for FL2VA *and* Ref2VA**. It is the
 only 8-step option for the default `refs-gen-video` slot, where LightX2V still
@@ -160,8 +160,9 @@ consumes the dt-weighted mean of the heads it spans. ComfyUI detects the bank
 from the `[N*out, in]` weight shape (#15908) so the stock loader reads it, but
 the graph must keep H3's **native 12/3 shifts** — the bank indexes its interval
 grid by them, and a wrong pair blends the wrong heads silently. Distillations
-do not stack, so `H3_PDD` refuses to coexist with `H3_TURBO*` and raises at
-deploy time.
+do not stack: picking `H3_TURBO` / `H3_TURBO_REF` opts out of PDD, and setting
+`H3_PDD=1` *alongside* a turbo family raises at deploy time. `H3_PDD=0` returns
+to the un-distilled 20-step path.
 
 The FL2VA default is the **768p-trained** 8-step build (shipped 2026-08-27):
 same distillation NFE as the original 8-step LoRA but trained at 1344×768,

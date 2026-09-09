@@ -65,12 +65,13 @@ where the deploy shell's environment is absent — re-deploy after changing:
                            base, not our pruned int8 — A/B before enabling.
   H3_TURBO_REF_STEPS       Ref2VA turbo steps, default 4 (distill NFE).
   H3_TURBO_REF_LORA        Ref2VA LoRA filename, must match download.py.
-  H3_PDD                   "1" to run BOTH FL2VA and Ref2VA slots with the
-                           Alibaba PAI PDD Acc LoRAs at 8 NFE — the only
-                           8-step option for the default refs-gen-video slot.
-                           Mutually exclusive with H3_TURBO / H3_TURBO_REF
-                           (distillations do not stack); setting both raises
-                           at deploy time.
+  H3_PDD                   ON by default: BOTH FL2VA and Ref2VA slots run the
+                           Alibaba PAI PDD Acc LoRAs at 8 NFE (measured 1.85x
+                           on Ref2VA). Set "0" for the un-distilled 20-step
+                           path. Choosing H3_TURBO / H3_TURBO_REF opts out of
+                           PDD instead of colliding with it; setting H3_PDD=1
+                           *and* a turbo family raises at deploy time, since
+                           distillations do not stack.
   H3_PDD_STEPS             PDD sampling steps, default 8 (distillation NFE).
   H3_PDD_FL2VA_LORA        PDD LoRA filenames, must match download.py.
   H3_PDD_REF2VA_LORA
@@ -175,7 +176,24 @@ TURBO_REF_LORA = (
 # 12/3 shifts, because the bank's interval grid was built against them.
 #
 # Distillations do not stack — PDD is mutually exclusive with H3_TURBO*.
-PDD = (os.environ.get("H3_PDD") or "").strip().lower() in ("1", "true", "on")
+# On by default: measured 1.85x on Ref2VA (226 s vs 418 s for the same seed,
+# prompt and reference image on B200) with the audio track intact. Turning it
+# off falls back to the un-distilled 20-step path.
+_PDD_ENV = (os.environ.get("H3_PDD") or "").strip().lower()
+_TURBO_CHOSEN = TURBO or TURBO_REF
+if _PDD_ENV in ("0", "false", "off"):
+    PDD = False
+elif _PDD_ENV in ("1", "true", "on"):
+    if _TURBO_CHOSEN:
+        raise RuntimeError(
+            "H3_PDD cannot be combined with H3_TURBO / H3_TURBO_REF: "
+            "distillations do not stack. Pick one family and re-deploy."
+        )
+    PDD = True
+else:
+    # Unset: PDD is the default, but choosing a turbo family opts out of it
+    # rather than colliding with it.
+    PDD = not _TURBO_CHOSEN
 PDD_STEPS = int(os.environ.get("H3_PDD_STEPS") or 8)
 PDD_FL2VA_LORA = (
     os.environ.get("H3_PDD_FL2VA_LORA")
@@ -185,12 +203,6 @@ PDD_REF2VA_LORA = (
     os.environ.get("H3_PDD_REF2VA_LORA")
     or "MiniMax-H3-Ref2VA-Acc-8Step_pruned_comfy.safetensors"
 ).strip()
-if PDD and (TURBO or TURBO_REF):
-    raise RuntimeError(
-        "H3_PDD cannot be combined with H3_TURBO / H3_TURBO_REF: distillations "
-        "do not stack. Pick one acceleration family and re-deploy."
-    )
-
 # AV sigma shifts, set on the sampling model via MiniMaxH3SigmaShift like the
 # official LightX2V workflows. These are a property of the active LoRA, not a
 # global: the 768p variants were distilled on a shift-6 video schedule while
@@ -382,38 +394,39 @@ def _accel(fl2va: bool) -> dict:
     """Which distill LoRA (if any) this graph runs, and at how many steps.
     PDD and turbo are mutually exclusive, enforced at import."""
     if PDD:
-        return {"turbo_lora": PDD_FL2VA_LORA if fl2va else PDD_REF2VA_LORA,
-                "turbo_steps": PDD_STEPS}
+        return {"distill_lora": PDD_FL2VA_LORA if fl2va else PDD_REF2VA_LORA,
+                "distill_steps": PDD_STEPS}
     if fl2va and TURBO:
-        return {"turbo_lora": TURBO_LORA, "turbo_steps": TURBO_STEPS}
+        return {"distill_lora": TURBO_LORA, "distill_steps": TURBO_STEPS}
     if not fl2va and TURBO_REF:
-        return {"turbo_lora": TURBO_REF_LORA, "turbo_steps": TURBO_REF_STEPS}
-    return {"turbo_lora": None, "turbo_steps": 0}
+        return {"distill_lora": TURBO_REF_LORA, "distill_steps": TURBO_REF_STEPS}
+    return {"distill_lora": None, "distill_steps": 0}
 
 
 def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int,
-                    turbo_lora: Optional[str] = None, turbo_steps: int = 0) -> None:
+                    distill_lora: Optional[str] = None, distill_steps: int = 0) -> None:
     """Shared tail of both graphs: loaders are added by the callers; this wires
     the official template's custom sampling stack + AV decode + mp4 mux.
     Includes Sol-Attn sparse attention optimization (kijai/Triton) for ~3.9× speedup.
 
-    With ``turbo_lora`` set: the LightX2V distill LoRA is applied right after
-    the UNet loader and sampling drops to ``turbo_steps`` plain Euler on the
+    With ``distill_lora`` set: the distill LoRA (PDD or LightX2V turbo) is
+    applied right after the UNet loader and sampling drops to
+    ``distill_steps`` plain Euler on the
     ``simple`` schedule — the uniform-grid contract the LoRAs were distilled
     on. Model chain mirrors the official LightX2V workflows:
     UNETLoader -> [LoraLoaderModelOnly] -> MiniMaxH3SigmaShift -> SolAttn."""
     model_src = "1"
-    if turbo_lora:
+    if distill_lora:
         wf["49"] = {
             "class_type": "LoraLoaderModelOnly",
             "inputs": {
                 "model": ["1", 0],
-                "lora_name": turbo_lora,
+                "lora_name": distill_lora,
                 "strength_model": TURBO_STRENGTH,
             },
         }
         model_src = "49"
-    shift_video, shift_audio = _shifts(turbo_lora)
+    shift_video, shift_audio = _shifts(distill_lora)
     wf["51"] = {
         "class_type": "MiniMaxH3SigmaShift",
         "inputs": {"model": [model_src, 0],
@@ -443,12 +456,12 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
     wf["6"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}}
     wf["7"] = {
         "class_type": "KSamplerSelect",
-        "inputs": {"sampler_name": "euler" if turbo_lora else "res_multistep"},
+        "inputs": {"sampler_name": "euler" if distill_lora else "res_multistep"},
     }
     wf["8"] = {
         "class_type": "BasicScheduler",
         "inputs": {"model": ["50", 0], "scheduler": "simple",
-                   "steps": turbo_steps if turbo_lora else STEPS, "denoise": 1.0},
+                   "steps": distill_steps if distill_lora else STEPS, "denoise": 1.0},
     }
     wf["9"] = {
         "class_type": "BasicGuider",
@@ -755,8 +768,8 @@ class Inference:
         frames = _frames_from_duration(duration)
         a = _accel(fl2va=True)
         print(f"[h3-timing] request fl2va {w}x{h} {frames}f "
-              f"steps={a['turbo_steps'] or STEPS} "
-              f"lora={a['turbo_lora'] or 'none'}", flush=True)
+              f"steps={a['distill_steps'] or STEPS} "
+              f"lora={a['distill_lora'] or 'none'}", flush=True)
         first_fn = self._write_input("first.png", first) if first else None
         last_fn = self._write_input("last.png", last) if last else None
         wf = _fl2va_graph((text or "").strip(), w, h, frames, _seed(seed),
@@ -768,8 +781,8 @@ class Inference:
         w, h = _canvas(width, height)
         a = _accel(fl2va=False)
         print(f"[h3-timing] request ref2va {w}x{h} {frames}f "
-              f"steps={a['turbo_steps'] or STEPS} "
-              f"lora={a['turbo_lora'] or 'none'} "
+              f"steps={a['distill_steps'] or STEPS} "
+              f"lora={a['distill_lora'] or 'none'} "
               f"refs={len(images)}i/{len(videos)}v/{len(audios)}a", flush=True)
         image_files = [
             self._write_input(f"ref_img_{i}.png", b) for i, b in enumerate(images)
@@ -871,7 +884,7 @@ class Inference:
         w, h = _canvas(input.width, input.height)
         img_fn = self._write_input("ref_img_0.png", img)
         print(f"[h3-timing] request ref2va(audio-image) {w}x{h} {frames}f "
-              f"steps={_accel(fl2va=False)['turbo_steps'] or STEPS}", flush=True)
+              f"steps={_accel(fl2va=False)['distill_steps'] or STEPS}", flush=True)
         wf = _ref2va_graph(text, w, h, frames, 42, [img_fn], [], [aud_fn])
         ok, res = _submit_graph(self.base, wf)
         if ok:
