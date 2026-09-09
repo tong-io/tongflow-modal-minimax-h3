@@ -31,7 +31,9 @@ ignored.
 ComfyUI is pinned to a master commit rather than a release tag, and the image
 build patches out one upstream line — see COMFY_COMMIT below for why.
 
-Env knobs (all optional, read at deploy time — re-deploy after changing):
+Env knobs (all optional). Read when `modal deploy` runs and baked into the
+image via _DEPLOY_ENV, because Modal re-imports this module in the container
+where the deploy shell's environment is absent — re-deploy after changing:
   H3_GPU                   default "B200" (fastest: 10 s = 10m04 / $1.05).
                            "RTX-PRO-6000" is the budget option (Blackwell
                            96 GB, 10 s = 18m11 / $0.92 — 45% slower, 12%
@@ -243,6 +245,10 @@ MAX_REF_VIDEOS = 3
 MAX_REF_AUDIOS = 3
 MAX_REF_TOTAL = 12
 
+# Snapshot of the H3_* knobs as the deploy shell saw them, baked into the
+# image below so the constants above resolve identically in the container.
+_DEPLOY_ENV = {k: v for k, v in os.environ.items() if k.startswith("H3_")}
+
 volume = modal.Volume.from_name("models", create_if_missing=True)
 
 app = modal.App(Path(__file__).resolve().parent.name)
@@ -279,7 +285,13 @@ image = (
         f"checkout {SOLATTN_COMMIT}",
     )
     .pip_install("tongflow==0.2.21", "fastapi[standard]", "triton>=3.3")
-    .env({"PYTHONPATH": COMFY, "HF_HOME": "/models/hf"})
+    # Modal re-imports this module inside the container, so every module-level
+    # os.environ.get() above reads the *container's* environment rather than
+    # the shell that ran `modal deploy`. Without baking them in, each H3_* knob
+    # silently resolves to its default at runtime no matter what was exported
+    # at deploy time — only H3_GPU escaped that, because @app.cls(gpu=...) is
+    # evaluated locally. Keep this last so flipping a knob rebuilds one layer.
+    .env({"PYTHONPATH": COMFY, "HF_HOME": "/models/hf", **_DEPLOY_ENV})
 )
 
 with image.imports():

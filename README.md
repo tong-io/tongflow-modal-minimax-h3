@@ -105,12 +105,16 @@ both price and speed; the real choice is B200 vs RTX-PRO-6000.
 
 | GPU | 10 s clip | 15 s clip | Notes |
 |---|---|---|---|
-| **B200 $6.25/h (default)** | **6 m 52 s (~$0.72) ✓** | **11 m 24 s (~$1.19) ✓** | fastest; both checkpoints resident in 192 GB |
+| **B200 $6.25/h (default)** | **6 m 52 s (~$0.72) ✓**<br>**3 m 46 s (~$0.39) with `H3_PDD=1` ✓** | **11 m 24 s (~$1.19) ✓** | fastest; both checkpoints resident in 192 GB |
 | RTX-PRO-6000 $3.03/h | 18 m 11 s ($0.92) ✓ | — | ~45% slower and, at these rates, no longer cheaper per clip; Blackwell 96 GB, nvfp4 native |
 | H100 $3.95/h + int8 TE | 20 m 25 s ($1.34) ✓ | — | dominated on both axes |
 | A100-80GB $2.50/h + int8 TE | >40 min (aborted) ✓ | ⚠️ times out | not recommended |
 
-(✓ = measured, un-distilled 20-step Ref2VA at 1344×768. The B200 row is from
+(✓ = measured on Ref2VA at 1344×768, un-distilled 20-step unless the row says
+otherwise. `H3_PDD=1` was measured 2026-09-09 against the same seed, prompt and
+reference image: **226 s vs 418 s, 1.85×**, with the audio track intact
+(`max_volume −27.1 dB`, real dynamic range — not the constant-DC failure of
+#15799). The B200 row is from
 2026-09-09 on the current pin; dropping upstream's `v = v.clone()` bought ~9%
 over the 2026-08-25 measurement of the same clip. The other rows are still
 v0.30.0-era and should be re-measured before being trusted.) Duration scales
@@ -123,7 +127,12 @@ One checkpoint + text encoder + VAEs fit in 80 GB; on A100/H100, switching
 between FL2VA and Ref2VA slots reloads ~21 GB from the volume (tens of
 seconds).
 
-Env knobs (TongFlow Settings; deploy-time — see "Applying env changes" below):
+Env knobs are read when `modal deploy` runs and **baked into the image** so the
+container sees them: Modal re-imports this module inside the container, where
+the deploy shell's environment does not exist, so a module-level
+`os.environ.get()` would otherwise always fall back to its default. Flipping a
+knob rebuilds one image layer. (TongFlow Settings; see "Applying env changes"
+below):
 `H3_GPU` (B200), `H3_TEXT_ENCODER_VARIANT` (nvfp4|int8), `H3_SHORT_EDGE` (768;
 lower it for faster drafts), `H3_STEPS` (20), and the FL2VA turbo family:
 `H3_TURBO` (off; set `1` to run the three FL2VA slots with the
