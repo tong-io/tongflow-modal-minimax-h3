@@ -104,7 +104,52 @@ from tongflow.models.refs_gen_video import RefsGenVideoInput, RefsGenVideoOutput
 from tongflow.models.text_gen_video import TextGenVideoInput, TextGenVideoOutput
 from tongflow.node_slots import NodeSlots
 from tongflow.protocol import asset, prompt_media_to_bytes
-from tongflow.slots import node_slot
+from tongflow.slots import current_params, node_slot
+
+
+def _adv(name: str, default):
+    """Advanced-section override (``TONGFLOW_SLOT_PARAMS``) or the plugin default."""
+    v = current_params().get(name)
+    if v is None:
+        return default
+    if isinstance(default, bool):
+        return bool(v)
+    if isinstance(default, int):
+        return int(v)
+    if isinstance(default, float):
+        return float(v)
+    return v
+
+# Per-run knobs offered under the node's collapsed "Advanced" section.
+# Pure literal (the platform scanner reads it by AST, never imports this
+# module). Values reach the handlers via current_params(); an untouched
+# control is absent there and falls back to the plugin default.
+TONGFLOW_SLOT_PARAMS = {
+    "text-gen-video": {
+        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
+    },
+    "image-gen-video": {
+        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
+    },
+    "image-image-gen-video": {
+        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
+    },
+    "images-gen-video": {
+        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
+    },
+    "audio-image-gen-video": {
+        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
+    },
+    "refs-gen-video": {
+        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
+    },
+}
 
 COMFY = "/opt/ComfyUI"
 # The commit tagged v0.35.0 (2026-09-09) — the first published release to
@@ -292,7 +337,7 @@ image = (
         f"git -C {COMFY}/custom_nodes/ComfyUI-SolAttn_triton "
         f"checkout {SOLATTN_COMMIT}",
     )
-    .pip_install("tongflow==0.2.21", "fastapi[standard]", "triton>=3.3")
+    .pip_install("tongflow==0.3.3", "fastapi[standard]", "triton>=3.3")
     # Modal re-imports this module inside the container, so every module-level
     # os.environ.get() above reads the *container's* environment rather than
     # the shell that ran `modal deploy`. Without baking them in, each H3_* knob
@@ -389,7 +434,7 @@ _AUDIO_EXT = {"audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "au
 def _accel(fl2va: bool) -> dict:
     """Which distill LoRA (if any) this graph runs, and at how many steps.
     PDD and turbo are mutually exclusive, enforced at import."""
-    if PDD:
+    if PDD and _adv("pdd", True):
         return {"distill_lora": PDD_FL2VA_LORA if fl2va else PDD_REF2VA_LORA,
                 "distill_steps": PDD_STEPS}
     if fl2va and TURBO:
@@ -457,7 +502,8 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
     wf["8"] = {
         "class_type": "BasicScheduler",
         "inputs": {"model": ["50", 0], "scheduler": "simple",
-                   "steps": distill_steps if distill_lora else STEPS, "denoise": 1.0},
+                   "steps": _adv("steps", distill_steps if distill_lora else STEPS),
+                   "denoise": 1.0},
     }
     wf["9"] = {
         "class_type": "BasicGuider",
