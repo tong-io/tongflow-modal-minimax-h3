@@ -126,27 +126,33 @@ def _adv(name: str, default):
 # control is absent there and falls back to the plugin default.
 TONGFLOW_SLOT_PARAMS = {
     "text-gen-video": {
-        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "steps": {"type": "integer", "default": 20, "min": 4, "max": 60, "label": "Steps (base)", "description": "Used when PDD fast sampling is off."},
+        "pdd_steps": {"type": "integer", "default": 8, "min": 2, "max": 16, "label": "Steps (PDD)", "description": "Used on the distilled fast path."},
         "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
     },
     "image-gen-video": {
-        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "steps": {"type": "integer", "default": 20, "min": 4, "max": 60, "label": "Steps (base)", "description": "Used when PDD fast sampling is off."},
+        "pdd_steps": {"type": "integer", "default": 8, "min": 2, "max": 16, "label": "Steps (PDD)", "description": "Used on the distilled fast path."},
         "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
     },
     "image-image-gen-video": {
-        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "steps": {"type": "integer", "default": 20, "min": 4, "max": 60, "label": "Steps (base)", "description": "Used when PDD fast sampling is off."},
+        "pdd_steps": {"type": "integer", "default": 8, "min": 2, "max": 16, "label": "Steps (PDD)", "description": "Used on the distilled fast path."},
         "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
     },
     "images-gen-video": {
-        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "steps": {"type": "integer", "default": 20, "min": 4, "max": 60, "label": "Steps (base)", "description": "Used when PDD fast sampling is off."},
+        "pdd_steps": {"type": "integer", "default": 8, "min": 2, "max": 16, "label": "Steps (PDD)", "description": "Used on the distilled fast path."},
         "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
     },
     "audio-image-gen-video": {
-        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "steps": {"type": "integer", "default": 20, "min": 4, "max": 60, "label": "Steps (base)", "description": "Used when PDD fast sampling is off."},
+        "pdd_steps": {"type": "integer", "default": 8, "min": 2, "max": 16, "label": "Steps (PDD)", "description": "Used on the distilled fast path."},
         "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
     },
     "refs-gen-video": {
-        "steps": {"type": "integer", "min": 1, "max": 60, "label": "Steps", "description": "Sampling steps. Default 8 on the PDD path, 20 without."},
+        "steps": {"type": "integer", "default": 20, "min": 4, "max": 60, "label": "Steps (base)", "description": "Used when PDD fast sampling is off."},
+        "pdd_steps": {"type": "integer", "default": 8, "min": 2, "max": 16, "label": "Steps (PDD)", "description": "Used on the distilled fast path."},
         "pdd": {"type": "boolean", "default": True, "label": "PDD fast sampling", "description": "Distilled 8-step LoRA path. Off = full base sampling (slower, sometimes finer)."},
     },
 }
@@ -502,7 +508,7 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
     wf["8"] = {
         "class_type": "BasicScheduler",
         "inputs": {"model": ["50", 0], "scheduler": "simple",
-                   "steps": _adv("steps", distill_steps if distill_lora else STEPS),
+                   "steps": _adv("pdd_steps", distill_steps) if distill_lora else _adv("steps", STEPS),
                    "denoise": 1.0},
     }
     wf["9"] = {
