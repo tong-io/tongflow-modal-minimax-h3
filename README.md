@@ -271,9 +271,10 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 ## Known gaps / notes
 
-- **ComfyUI is pinned to a master commit (`15eb748b`), not a release tag.**
-  The v0.33.x / v0.34.x tags are narrow backports that carry the tokenizer fix
-  but none of the H3 work below, and the last published release is v0.34.0:
+- **ComfyUI is pinned to `40c4fcdf`, the commit tagged v0.35.0** (2026-09-09)
+  — the first published release carrying the whole run of H3 work that only
+  master had for three weeks. Pinned by SHA rather than tag name so a moved
+  tag cannot change the build:
   - **#15808** tokenizer special tokens. H3's `tokenizer_config` declares
     `<d>`, `</d>`, `<|cutoff|>`, `<|lyrics_*|>`, `<|caption_*|>` but
     `tokenizer.json` does not, so `<d>` used to tokenize as three ordinary
@@ -282,6 +283,7 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
   - **#15975 / #16020** Fun ControlNet as a model patch, and letting it
     coexist with reference conditioning. Not wired up here yet.
   - **#16065** VAE optional / text-encoder-only references.
+  - **#15988** denoise mask fix.
   - **#16103** removes the `v = v.clone()` memory workaround, which cost up
     to 4× at full resolution (#15665). This build used to delete that line
     itself; now it only asserts the line stays gone, so a revert or a

@@ -28,8 +28,7 @@ H3-Context-IR (MiniMax's hosted prompt rewriter) is not open source, so
 prompts are passed through verbatim; ``enhance_prompt`` is accepted and
 ignored.
 
-ComfyUI is pinned to a master commit rather than a release tag, and the image
-build patches out one upstream line — see COMFY_COMMIT below for why.
+ComfyUI is pinned to the v0.35.0 release commit — see COMFY_COMMIT below.
 
 Env knobs (all optional). Read when `modal deploy` runs and baked into the
 image via _DEPLOY_ENV, because Modal re-imports this module in the container
@@ -45,13 +44,11 @@ where the deploy shell's environment is absent — re-deploy after changing:
   H3_SHORT_EDGE            canvas short edge, default 768 (model native).
                            Lower (e.g. 512) for faster, cheaper drafts.
   H3_STEPS                 sampling steps, default 20 (official template).
-  H3_TURBO                 "1" to enable the LightX2V FL2VA Turbo LoRA
-                           (lightx2v/Minimax-h3-Turbo, 8-step v1.0, Apache-2.0)
-                           on the three FL2VA slots. Default off — A/B against
-                           the 20-step baseline before enabling. Ref2VA slots
-                           (incl. the default refs-gen-video) always run the
-                           un-distilled 20-step path: no Ref2VA distill exists
-                           yet (LightX2V roadmap item 2).
+  H3_TURBO                 "1" to run the three FL2VA slots on the LightX2V
+                           Turbo LoRA (lightx2v/Minimax-h3-Turbo, 8-step v1.0
+                           768p, Apache-2.0) instead of PDD. Opt-in alternative
+                           to the PDD default; Ref2VA slots are unaffected by
+                           this knob (see H3_TURBO_REF).
   H3_TURBO_STEPS           FL2VA turbo sampling steps, default 8 (the model's
                            distillation NFE; 4 is valid but softer).
   H3_TURBO_LORA            LoRA filename under loras/, default the 8-step
@@ -110,9 +107,9 @@ from tongflow.protocol import asset, prompt_media_to_bytes
 from tongflow.slots import node_slot
 
 COMFY = "/opt/ComfyUI"
-# Pinned to a master commit, not a release tag: the v0.33.x/v0.34.x tags are
-# narrow backports that carry the tokenizer fix but none of the H3 work below,
-# and the last published release is v0.34.0.
+# The commit tagged v0.35.0 (2026-09-09) — the first published release to
+# carry the whole run of H3 work that only master had for three weeks. Pinned
+# by SHA rather than tag name so a moved tag cannot change the build.
 #   #15808  tokenizer special tokens — H3's tokenizer_config declares <d>,
 #           </d>, <|cutoff|>, <|lyrics_*|>, <|caption_*|> but tokenizer.json
 #           does not, so `<d>` used to tokenize as three ordinary characters
@@ -122,10 +119,9 @@ COMFY = "/opt/ComfyUI"
 #           reference conditioning (unused here so far).
 #   #16065  VAE optional / text-encoder-only references.
 #   #16103  removes the `v = v.clone()` memory workaround that cost up to 4x
-#           at full resolution (#15665). We used to delete that line at build
-#           time; upstream deleted it here, so the build now asserts it stays
-#           gone instead of patching it out.
-COMFY_COMMIT = "15eb748b3ec5f8a0a2d470b7fb280e2d7579f916"
+#           at full resolution (#15665). The build asserts it stays gone.
+#   #15988  denoise mask fix.
+COMFY_COMMIT = "40c4fcdf513a4523e39d54a9d391908af8df8171"  # v0.35.0
 # Pin Sol-Attn: repo has no tags and moves fast; this is the 2026-08-08
 # "Fixes and optimizations" commit, after ComfyUI's H3 audio protocol switch.
 SOLATTN_COMMIT = "842c4eaa7d91"
