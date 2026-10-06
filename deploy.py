@@ -1,4 +1,4 @@
-"""Modal deploy entry for MiniMax-H3 (headless ComfyUI, native nodes + Sol-Attn).
+"""Modal deploy entry for MiniMax-H3 (headless ComfyUI, native nodes + sparse attention).
 
 MiniMax-H3 is a 33B omni-modal DiT that generates video with native stereo
 audio (24 fps, 768-short-edge, ~5-15 s). ComfyUI >= v0.30.0 ships native
@@ -12,14 +12,14 @@ task checkpoints:
   ``audio-image-gen-video`` (image + voice), ``refs-gen-video``
   (omni-reference: <=9 images + <=3 videos + <=3 audio clips, <=12 files).
 
-Inference is accelerated with Sol-Attn (kijai/Triton 3.3+) sparse attention,
-yielding ~3.9× speedup on GPU with Triton support (SM75+).
+Inference is accelerated with ComfyUI's own BlockSparseAttention (Sol-Attn
+selection on comfy-kitchen's CUDA kernels; needs a cu130 torch, see image).
 
 The API graphs are built programmatically (not from a workflow.json): the
 official t2v template wraps the pipeline in a UI subgraph, and Ref2VA needs a
 variable number of loader nodes anyway. The graph mirrors the official
 video_minimax_h3_* templates node-for-node (custom sampling stack with
-SolAttnPatch: RandomNoise / res_multistep / simple x20 / BasicGuider /
+BlockSparseAttention: RandomNoise / res_multistep / simple x20 / BasicGuider /
 SamplerCustomAdvanced, then VAEDecode + VAEDecodeAudio -> CreateVideo -> SaveVideo).
 
 Prompting: Ref2VA prompts address references as <Picture i> / <Video k> /
@@ -77,10 +77,10 @@ where the deploy shell's environment is absent — re-deploy after changing:
                            the 768p-trained variants, 12/3 (H3 native) for
                            everything else. Only set these to try a LoRA
                            this file does not know about.
-  H3_ATTN                  attention backend, default "solattn" (kijai's
-                           SolAttnPatch, the measured baseline). "core" is
-                           ComfyUI's own BlockSparseAttention (sol-attn mode,
-                           same tau/window); "vsa" transplants FastH3's
+  H3_ATTN                  attention backend, default "core" (ComfyUI's own
+                           BlockSparseAttention, sol-attn selection; 5 s
+                           Ref2VA+PDD on B200 42 s vs 66 s on the old kijai
+                           SolAttn + cu128 build). "vsa" transplants FastH3's
                            trained VSA gate (Kablex Ref2VAVSAGatePatch, needs
                            `H3_VSA=1 modal run download.py::download`);
                            "dense" runs no sparse patch (quality reference).
@@ -184,9 +184,6 @@ COMFY = "/opt/ComfyUI"
 #           at full resolution (#15665). The build asserts it stays gone.
 #   #15988  denoise mask fix.
 COMFY_COMMIT = "40c4fcdf513a4523e39d54a9d391908af8df8171"  # v0.35.0
-# Pin Sol-Attn: repo has no tags and moves fast; this is the 2026-08-08
-# "Fixes and optimizations" commit, after ComfyUI's H3 audio protocol switch.
-SOLATTN_COMMIT = "842c4eaa7d91"
 # Kablex/ComfyUI-Ref2VA-VSA (Apache-2.0), 2026-09-16 tensor-lifetime fix.
 REF2VA_VSA_COMMIT = "1b370329b174"
 COMFY_MODELS = "/models/comfyui"
@@ -293,21 +290,19 @@ def _shifts(lora: Optional[str]) -> tuple[float, float]:
         audio = float(_SHIFT_AUDIO_ENV)
     return video, audio
 
-# Attention backend between the sigma shift and the sampler. The SolAttnPatch
-# settings are the measured baseline; "core" mirrors them on ComfyUI's own
-# BlockSparseAttention so an A/B isolates the kernel, not the tuning.
-# ComfyUI #16382 reports artifacts from core sparse attention stacked on a
-# merged turbo LoRA — exactly what the PDD path does, so check the output.
-ATTN_BACKENDS = ("solattn", "core", "vsa", "dense")
-ATTN = (os.environ.get("H3_ATTN") or "solattn").strip().lower()
+# Attention backend between the sigma shift and the sampler. "core" keeps the
+# tuning of the kijai SolAttnPatch it replaced (that node crashes the server
+# on cu130 torch). ComfyUI #16382 reports artifacts from core sparse attention
+# stacked on a merged turbo LoRA; our PDD A/B (2026-10-06) showed none.
+ATTN_BACKENDS = ("core", "vsa", "dense")
+ATTN = (os.environ.get("H3_ATTN") or "core").strip().lower()
 if ATTN not in ATTN_BACKENDS:
     raise ValueError(f"H3_ATTN must be one of {ATTN_BACKENDS}, got {ATTN!r}")
 SPARSE_TAU = 1.5
 SPARSE_WINDOW = (0.1, 0.95)
 SPARSE_MIN_TOKENS = 4096
 # H3 has 50 DiT blocks. Core's parser reads "-1" as block 1, so the last
-# block is spelled out for it; kijai's node understands negative indices.
-SOLATTN_DENSE_BLOCKS = "0-2,-1"
+# block is spelled out.
 CORE_DENSE_BLOCKS = "0-2,49"
 VSA_GATE = "fasth3_vsa_gate.safetensors"
 VSA_SPARSITY = float(os.environ.get("H3_VSA_SPARSITY") or 0.70)
@@ -346,14 +341,17 @@ app = modal.App(Path(__file__).resolve().parent.name)
 
 image = (
     modal.Image.from_registry(
-        "nvidia/cuda:12.8.1-devel-ubuntu22.04", add_python="3.12"
+        "nvidia/cuda:13.0.3-devel-ubuntu22.04", add_python="3.12"
     )
     .apt_install("git", "ffmpeg")
+    # cu130 is load-bearing: on a CUDA < 13 torch, ComfyUI's quant_ops
+    # disables comfy-kitchen's whole CUDA backend — its optimized int8/nvfp4
+    # ops and BlockSparseAttention silently fall back to slow paths.
     .pip_install(
-        "torch==2.7.1",
-        "torchvision==0.22.1",
-        "torchaudio==2.7.1",
-        extra_index_url="https://download.pytorch.org/whl/cu128",
+        "torch==2.14.1",
+        "torchvision==0.29.1",
+        "torchaudio==2.11.0",
+        extra_index_url="https://download.pytorch.org/whl/cu130",
     )
     .run_commands(
         # Shallow-fetch the pinned commit (a SHA, so --branch cannot be used).
@@ -369,17 +367,15 @@ image = (
         # regression that would only show up as a slow bill.
         f"! grep -q 'v = v.clone()' {COMFY}/comfy/ldm/minimax/model.py",
         f"pip install -r {COMFY}/requirements.txt",
-        "pip install --upgrade 'triton>=3.3' --no-deps",
-        f"git clone https://github.com/kijai/ComfyUI-SolAttn_triton.git "
-        f"{COMFY}/custom_nodes/ComfyUI-SolAttn_triton && "
-        f"git -C {COMFY}/custom_nodes/ComfyUI-SolAttn_triton "
-        f"checkout {SOLATTN_COMMIT}",
+        # Fail the build if requirements.txt swapped torch for a CUDA < 13 one.
+        "python -c \"import torch; v = tuple(map(int, torch.version.cuda.split('.'))); "
+        "assert v >= (13,), f'torch {torch.__version__} is CUDA {v}, need cu130+'\"",
         f"git clone https://github.com/Kablex/ComfyUI-Ref2VA-VSA.git "
         f"{COMFY}/custom_nodes/ComfyUI-Ref2VA-VSA && "
         f"git -C {COMFY}/custom_nodes/ComfyUI-Ref2VA-VSA "
         f"checkout {REF2VA_VSA_COMMIT}",
     )
-    .pip_install("tongflow==0.3.3", "fastapi[standard]", "triton>=3.3")
+    .pip_install("tongflow==0.3.3", "fastapi[standard]")
     # Modal re-imports this module inside the container, so every module-level
     # os.environ.get() above reads the *container's* environment rather than
     # the shell that ran `modal deploy`. Without baking them in, each H3_* knob
@@ -503,28 +499,7 @@ def _attention_node(wf: dict, model_src: str) -> str:
     """Add the run's attention backend (node "50") after ``model_src`` and
     return the node the sampler should read the model from."""
     attn = str(_adv("attn", ATTN)).strip().lower()
-    if attn == "solattn":
-        wf["50"] = {
-            "class_type": "SolAttnPatch",
-            "inputs": {
-                "model": [model_src, 0],
-                "tau": SPARSE_TAU,
-                "start_percent": SPARSE_WINDOW[0],
-                "end_percent": SPARSE_WINDOW[1],
-                "min_tokens": SPARSE_MIN_TOKENS,
-                "int8_qk": True,
-                # Required since the 2026-08-08 V3-schema rework of the node:
-                # INT8 P@V alongside INT8 QK ("the other half of the int8 win").
-                "int8_pv": True,
-                "sink_conditioning": "exact_kv_and_rows",
-                "morton": True,
-                "morton_curve": "2d_frame",
-                "verbose": False,
-                "use_tma": False,
-                "dense_blocks": SOLATTN_DENSE_BLOCKS,
-            },
-        }
-    elif attn == "core":
+    if attn == "core":
         wf["50"] = {
             "class_type": "BlockSparseAttention",
             "inputs": {
@@ -543,7 +518,7 @@ def _attention_node(wf: dict, model_src: str) -> str:
         }
     elif attn == "vsa":
         # Brings its own attention override and refuses to stack on another,
-        # so it replaces Sol-Attn rather than following it.
+        # so it replaces the core sparse patch rather than following it.
         wf["50"] = {
             "class_type": "Ref2VAVSAGatePatch",
             "inputs": {
@@ -563,7 +538,7 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
                     distill_lora: Optional[str] = None, distill_steps: int = 0) -> None:
     """Shared tail of both graphs: loaders are added by the callers; this wires
     the official template's custom sampling stack + AV decode + mp4 mux.
-    The attention backend (Sol-Attn by default) is picked by _attention_node.
+    The attention backend (core sparse by default) is picked by _attention_node.
 
     With ``distill_lora`` set: the distill LoRA (PDD or LightX2V turbo) is
     applied right after the UNet loader and sampling drops to
@@ -711,12 +686,21 @@ def _submit_graph(base, wf):
         pid = json.loads(urllib.request.urlopen(req, timeout=30).read())["prompt_id"]
     except urllib.error.HTTPError as e:
         return False, f"workflow rejected: {e.read().decode()[:1500]}"
+    except (urllib.error.URLError, ConnectionError) as e:
+        return False, f"ComfyUI server lost: {e}\n[server log]\n" + _tail_log()
     out = None
     final_status = {}
     for _ in range(3600):
         time.sleep(1)
-        with urllib.request.urlopen(f"{base}/history/{pid}", timeout=10) as r:
-            hist = json.loads(r.read())
+        try:
+            with urllib.request.urlopen(f"{base}/history/{pid}", timeout=10) as r:
+                hist = json.loads(r.read())
+        except (urllib.error.URLError, ConnectionError) as e:
+            # The server process died mid-graph (segfault, OOM kill): the
+            # log tail is the only record of why.
+            print(f"[h3-timing] server lost after {time.monotonic() - t0:.0f}s",
+                  flush=True)
+            return False, f"ComfyUI server lost: {e}\n[server log]\n" + _tail_log()
         if pid not in hist:
             continue
         h = hist[pid]

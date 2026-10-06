@@ -259,10 +259,26 @@ entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 
 | `attn` | Node | Notes |
 | --- | --- | --- |
-| `solattn` (default) | kijai `SolAttnPatch` | the measured baseline |
-| `core` | ComfyUI `BlockSparseAttention`, sol-attn mode | first-party since v0.35.0 (#16072); same tau 1.5 / window / dense blocks as the baseline, so an A/B isolates the kernel |
-| `vsa` | Kablex `Ref2VAVSAGatePatch` | transplants FastH3's trained VSA gate; upstream reports ~9× vs dense on Ref2VA with the 4-step turbo LoRA. Experimental, needs the 3.6 GB gate |
+| `core` (default) | ComfyUI `BlockSparseAttention`, sol-attn mode | first-party since v0.35.0 (#16072); replaced kijai's SolAttnPatch, which crashes the server on cu130 torch |
+| `vsa` | Kablex `Ref2VAVSAGatePatch` | transplants FastH3's trained VSA gate. Experimental, needs the 3.6 GB gate; in our A/B it pulled the scene toward the reference photo and ran the audio hot |
 | `dense` | none | quality reference |
+
+Measured 2026-10-06 (5 s Ref2VA + PDD 8-step, 1344×768, B200, execution
+time, one sample each):
+
+| Build | Attention | Time |
+| --- | --- | --- |
+| cu128 torch (old) | kijai SolAttn | 66 s |
+| cu128 torch (old) | dense (core silently fell back to it) | 92 s |
+| cu130 torch | dense | 68–70 s |
+| **cu130 torch** | **core** | **42 s** |
+| cu130 torch | vsa + PDD 8-step | 56 s |
+| cu130 torch | vsa + turbo 4-step | 35 s |
+
+The torch build matters more than the kernel: on a CUDA < 13 torch, ComfyUI
+disables comfy-kitchen's whole CUDA backend, so its optimized ops and the
+core sparse node fall back to slow paths without an error. The image build
+now asserts cu130+.
 
 `bench.py` runs a matrix of `<attn>/<distill>` (`distill` = `pdd` / `turbo` /
 `base`) on **one** deploy, same seed, through hidden per-run params — no
@@ -276,11 +292,11 @@ python bench.py --image ref.png --prompt "<Picture 1> ..."          # shows the 
 python bench.py --image ref.png --prompt "<Picture 1> ..." --yes    # bills Modal
 ```
 
-Default matrix: `solattn/pdd` (cold warm-up), `solattn/pdd`, `core/pdd`,
-`vsa/pdd`, `vsa/turbo`, `dense/pdd` — about 6 B200 runs at 5 s. Check each
-clip by eye, not just the timing: ComfyUI #16382 reports ripple artifacts
-from core sparse attention stacked on a merged turbo LoRA, which is exactly
-the `core/pdd` combination. `results.json` also records the decoded audio
+Default matrix: `core/pdd` (cold warm-up, run on seed+1 so ComfyUI's cache
+cannot answer the repeat), `core/pdd`, `vsa/pdd`, `vsa/turbo`, `dense/pdd`.
+Check each clip by eye, not just the timing: ComfyUI #16382 reports ripple
+artifacts from core sparse attention stacked on a merged turbo LoRA (not
+reproduced with PDD so far). `results.json` also records the decoded audio
 levels (`mean_volume: -inf` = silent track).
 
 ## Measured performance
@@ -322,7 +338,7 @@ levels (`mean_volume: -inf` = silent track).
   - Audio sampling semantics changed back at the v0.30.0 → v0.32.0 move —
     **A/B one clip's audio after upgrading**, and check the track is not
     constant-DC or silent (#15799 reports that on some setups).
-  - Sol-Attn is pinned to its 2026-08-08 commit.
+  - Torch is cu130 (2.14.1); the build fails on a CUDA < 13 torch.
 - The Ref2VA graph wires references via ComfyUI autogrow inputs
   (`ref_images.ref_image_0` …) — validated against the v0.30.0 template
   serialization, but the first live run is the real test (a rejection error

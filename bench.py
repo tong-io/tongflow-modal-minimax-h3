@@ -3,9 +3,11 @@
 Every run bills Modal on the deployed GPU (B200 by default). Runs go to a
 private container pool (max 1 container, 30 s scaledown) so they share one
 warm boot without touching the production pool's scaledown setting. The first
-run pays the cold boot + weight load: keep a throwaway baseline first.
+run pays the cold boot + weight load: keep a throwaway baseline first. It uses
+seed+1, because ComfyUI caches identical graphs and would otherwise answer a
+repeat of it from cache in 0 s.
 
-Each run is "<attn>/<distill>", attn in solattn | core | vsa | dense, distill
+Each run is "<attn>/<distill>", attn in core | vsa | dense, distill
 in pdd | turbo | base. vsa needs the gate on the volume
 (`H3_VSA=1 modal run download.py::download`). Same seed throughout, so the
 clips are directly comparable.
@@ -31,7 +33,7 @@ import time
 from pathlib import Path
 
 APP = Path(__file__).resolve().parent.name
-DEFAULT_RUNS = "solattn/pdd,solattn/pdd,core/pdd,vsa/pdd,vsa/turbo,dense/pdd"
+DEFAULT_RUNS = "core/pdd,core/pdd,vsa/pdd,vsa/turbo,dense/pdd"
 SLOTS = {"refs": "refs_gen_video", "t2v": "text_gen_video"}
 
 
@@ -99,7 +101,8 @@ def main() -> None:
             params["vsa_sparsity"] = args.vsa_sparsity
         t0 = time.monotonic()
         try:
-            out = method.remote({**payload, "_params": params})
+            seed = args.seed + 1 if i == 0 else args.seed
+            out = method.remote({**payload, "seed": seed, "_params": params})
         except Exception as e:  # keep the remaining runs going
             out = {"success": False, "error": f"{type(e).__name__}: {e}"}
         wall = time.monotonic() - t0
