@@ -11,7 +11,8 @@ volume, laid out as ComfyUI model dirs under /models/comfyui:
   vae/               H3 video VAE (fp16, 5.2 GB) + audio VAE (fp32, 0.6 GB)
   loras/             LightX2V Turbo distill LoRAs + Alibaba PAI PDD Acc
                      LoRAs (ComfyUI exports, ~1.7-2.0 GB each; used only
-                     when the deploy sets H3_TURBO* / H3_PDD)
+                     when the deploy sets H3_TURBO* / H3_PDD); with H3_VSA=1
+                     also the FastH3 VSA gate for H3_ATTN=vsa (3.6 GB)
 
 Comfy-Org/MiniMax-H3 is public; HF_TOKEN is only needed if it becomes gated.
 Set H3_TEXT_ENCODER_VARIANT=nvfp4 (default int8) to fetch the NVFP4 text
@@ -111,6 +112,19 @@ MODELS = [
         "MiniMax-H3-Ref2VA-Acc-8Step_pruned_comfy.safetensors",
     ),
 ]
+
+# FastH3's 50 trained VSA gate matrices (3.6 GB), extracted from FastVideo's
+# VSA-DataFree checkpoint (FastVideo licence). Only the experimental
+# H3_ATTN=vsa backend reads it, so it is fetched on request: H3_VSA=1.
+if (os.environ.get("H3_VSA") or "").strip().lower() in ("1", "true", "on"):
+    MODELS.append(
+        (
+            "barelymining/ComfyUI-MiniMax-H3-FastVideo",
+            "fasth3_vsa_gate.safetensors",
+            "loras",
+            "fasth3_vsa_gate.safetensors",
+        )
+    )
 
 volume_name = str(_cfg.get("volumeName") or "models")
 volume = modal.Volume.from_name(volume_name, create_if_missing=True)

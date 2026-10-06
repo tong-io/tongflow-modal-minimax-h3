@@ -253,6 +253,36 @@ changing `H3_*` env vars in Settings, force a re-deploy by clearing the cache
 entry (`rm ~/.tongflow/modal-cache/tongflow-modal-minimax-h3.json`) or running
 `modal deploy deploy.py` manually with the new env exported.
 
+### 6. Attention backend A/B (`bench.py`)
+
+`H3_ATTN` picks what sits between the sigma shift and the sampler:
+
+| `attn` | Node | Notes |
+| --- | --- | --- |
+| `solattn` (default) | kijai `SolAttnPatch` | the measured baseline |
+| `core` | ComfyUI `BlockSparseAttention`, sol-attn mode | first-party since v0.35.0 (#16072); same tau 1.5 / window / dense blocks as the baseline, so an A/B isolates the kernel |
+| `vsa` | Kablex `Ref2VAVSAGatePatch` | transplants FastH3's trained VSA gate; upstream reports ~9× vs dense on Ref2VA with the 4-step turbo LoRA. Experimental, needs the 3.6 GB gate |
+| `dense` | none | quality reference |
+
+`bench.py` runs a matrix of `<attn>/<distill>` (`distill` = `pdd` / `turbo` /
+`base`) on **one** deploy, same seed, through hidden per-run params — no
+redeploy between configs. It uses its own container pool (1 container, 30 s
+scaledown), so the production pool's 2 s scaledown is untouched.
+
+```bash
+H3_VSA=1 modal run download.py::download      # once: adds the VSA gate
+modal deploy deploy.py                        # picks up the new image layer
+python bench.py --image ref.png --prompt "<Picture 1> ..."          # shows the plan
+python bench.py --image ref.png --prompt "<Picture 1> ..." --yes    # bills Modal
+```
+
+Default matrix: `solattn/pdd` (cold warm-up), `solattn/pdd`, `core/pdd`,
+`vsa/pdd`, `vsa/turbo`, `dense/pdd` — about 6 B200 runs at 5 s. Check each
+clip by eye, not just the timing: ComfyUI #16382 reports ripple artifacts
+from core sparse attention stacked on a merged turbo LoRA, which is exactly
+the `core/pdd` combination. `results.json` also records the decoded audio
+levels (`mean_volume: -inf` = silent track).
+
 ## Measured performance
 
 - **B200 + nvfp4 TE (default): 5 s in 4 m 17 s ($0.45); 10 s in

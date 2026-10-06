@@ -77,8 +77,19 @@ where the deploy shell's environment is absent — re-deploy after changing:
                            the 768p-trained variants, 12/3 (H3 native) for
                            everything else. Only set these to try a LoRA
                            this file does not know about.
+  H3_ATTN                  attention backend, default "solattn" (kijai's
+                           SolAttnPatch, the measured baseline). "core" is
+                           ComfyUI's own BlockSparseAttention (sol-attn mode,
+                           same tau/window); "vsa" transplants FastH3's
+                           trained VSA gate (Kablex Ref2VAVSAGatePatch, needs
+                           `H3_VSA=1 modal run download.py::download`);
+                           "dense" runs no sparse patch (quality reference).
+                           Also selectable per run via the hidden `attn`
+                           param — see bench.py.
+  H3_VSA_SPARSITY          fraction of video key tiles VSA prunes, default
+                           0.70 (upstream recommends 0.50-0.70).
 
-Deploy:           modal deploy deploy.py
+Deploy:          modal deploy deploy.py
 Download weights: modal run download.py::download
 """
 
@@ -176,6 +187,8 @@ COMFY_COMMIT = "40c4fcdf513a4523e39d54a9d391908af8df8171"  # v0.35.0
 # Pin Sol-Attn: repo has no tags and moves fast; this is the 2026-08-08
 # "Fixes and optimizations" commit, after ComfyUI's H3 audio protocol switch.
 SOLATTN_COMMIT = "842c4eaa7d91"
+# Kablex/ComfyUI-Ref2VA-VSA (Apache-2.0), 2026-09-16 tensor-lifetime fix.
+REF2VA_VSA_COMMIT = "1b370329b174"
 COMFY_MODELS = "/models/comfyui"
 COMFY_LOG = "/tmp/comfy.log"
 
@@ -280,7 +293,26 @@ def _shifts(lora: Optional[str]) -> tuple[float, float]:
         audio = float(_SHIFT_AUDIO_ENV)
     return video, audio
 
-FL2VA_UNET = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+# Attention backend between the sigma shift and the sampler. The SolAttnPatch
+# settings are the measured baseline; "core" mirrors them on ComfyUI's own
+# BlockSparseAttention so an A/B isolates the kernel, not the tuning.
+# ComfyUI #16382 reports artifacts from core sparse attention stacked on a
+# merged turbo LoRA — exactly what the PDD path does, so check the output.
+ATTN_BACKENDS = ("solattn", "core", "vsa", "dense")
+ATTN = (os.environ.get("H3_ATTN") or "solattn").strip().lower()
+if ATTN not in ATTN_BACKENDS:
+    raise ValueError(f"H3_ATTN must be one of {ATTN_BACKENDS}, got {ATTN!r}")
+SPARSE_TAU = 1.5
+SPARSE_WINDOW = (0.1, 0.95)
+SPARSE_MIN_TOKENS = 4096
+# H3 has 50 DiT blocks. Core's parser reads "-1" as block 1, so the last
+# block is spelled out for it; kijai's node understands negative indices.
+SOLATTN_DENSE_BLOCKS = "0-2,-1"
+CORE_DENSE_BLOCKS = "0-2,49"
+VSA_GATE = "fasth3_vsa_gate.safetensors"
+VSA_SPARSITY = float(os.environ.get("H3_VSA_SPARSITY") or 0.70)
+
+FL2VA_UNET ="minimax_h3_fl2va_pruned_int8_convrot.safetensors"
 REF2VA_UNET = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 TEXT_ENCODER = {
     "nvfp4": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
@@ -342,6 +374,10 @@ image = (
         f"{COMFY}/custom_nodes/ComfyUI-SolAttn_triton && "
         f"git -C {COMFY}/custom_nodes/ComfyUI-SolAttn_triton "
         f"checkout {SOLATTN_COMMIT}",
+        f"git clone https://github.com/Kablex/ComfyUI-Ref2VA-VSA.git "
+        f"{COMFY}/custom_nodes/ComfyUI-Ref2VA-VSA && "
+        f"git -C {COMFY}/custom_nodes/ComfyUI-Ref2VA-VSA "
+        f"checkout {REF2VA_VSA_COMMIT}",
     )
     .pip_install("tongflow==0.3.3", "fastapi[standard]", "triton>=3.3")
     # Modal re-imports this module inside the container, so every module-level
@@ -439,7 +475,20 @@ _AUDIO_EXT = {"audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "au
 
 def _accel(fl2va: bool) -> dict:
     """Which distill LoRA (if any) this graph runs, and at how many steps.
-    PDD and turbo are mutually exclusive, enforced at import."""
+    PDD and turbo are mutually exclusive, enforced at import. The hidden
+    per-run ``distill`` param ("pdd" | "turbo" | "base") overrides the deploy
+    choice so bench.py can A/B every family on one warm container."""
+    distill = _adv("distill", "")
+    if distill == "pdd":
+        return {"distill_lora": PDD_FL2VA_LORA if fl2va else PDD_REF2VA_LORA,
+                "distill_steps": PDD_STEPS}
+    if distill == "turbo":
+        return ({"distill_lora": TURBO_LORA, "distill_steps": TURBO_STEPS} if fl2va
+                else {"distill_lora": TURBO_REF_LORA, "distill_steps": TURBO_REF_STEPS})
+    if distill == "base":
+        return {"distill_lora": None, "distill_steps": 0}
+    if distill:
+        raise ValueError(f"distill must be pdd, turbo or base, got {distill!r}")
     if PDD and _adv("pdd", True):
         return {"distill_lora": PDD_FL2VA_LORA if fl2va else PDD_REF2VA_LORA,
                 "distill_steps": PDD_STEPS}
@@ -450,18 +499,78 @@ def _accel(fl2va: bool) -> dict:
     return {"distill_lora": None, "distill_steps": 0}
 
 
+def _attention_node(wf: dict, model_src: str) -> str:
+    """Add the run's attention backend (node "50") after ``model_src`` and
+    return the node the sampler should read the model from."""
+    attn = str(_adv("attn", ATTN)).strip().lower()
+    if attn == "solattn":
+        wf["50"] = {
+            "class_type": "SolAttnPatch",
+            "inputs": {
+                "model": [model_src, 0],
+                "tau": SPARSE_TAU,
+                "start_percent": SPARSE_WINDOW[0],
+                "end_percent": SPARSE_WINDOW[1],
+                "min_tokens": SPARSE_MIN_TOKENS,
+                "int8_qk": True,
+                # Required since the 2026-08-08 V3-schema rework of the node:
+                # INT8 P@V alongside INT8 QK ("the other half of the int8 win").
+                "int8_pv": True,
+                "sink_conditioning": "exact_kv_and_rows",
+                "morton": True,
+                "morton_curve": "2d_frame",
+                "verbose": False,
+                "use_tma": False,
+                "dense_blocks": SOLATTN_DENSE_BLOCKS,
+            },
+        }
+    elif attn == "core":
+        wf["50"] = {
+            "class_type": "BlockSparseAttention",
+            "inputs": {
+                "model": [model_src, 0],
+                # DynamicCombo: the option key, then its inputs dot-prefixed.
+                "selection": "sol-attn",
+                "selection.tau": SPARSE_TAU,
+                "start_percent": SPARSE_WINDOW[0],
+                "end_percent": SPARSE_WINDOW[1],
+                "dense_blocks": CORE_DENSE_BLOCKS,
+                "min_tokens": SPARSE_MIN_TOKENS,
+                "extra_tokens": 256,
+                "sink_conditioning": "exact_kv_and_rows",
+                "verbose": False,
+            },
+        }
+    elif attn == "vsa":
+        # Brings its own attention override and refuses to stack on another,
+        # so it replaces Sol-Attn rather than following it.
+        wf["50"] = {
+            "class_type": "Ref2VAVSAGatePatch",
+            "inputs": {
+                "model": [model_src, 0],
+                "gate_file": VSA_GATE,
+                "sparsity": _adv("vsa_sparsity", VSA_SPARSITY),
+            },
+        }
+    elif attn == "dense":
+        return model_src
+    else:
+        raise ValueError(f"attn must be one of {ATTN_BACKENDS}, got {attn!r}")
+    return "50"
+
+
 def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int,
                     distill_lora: Optional[str] = None, distill_steps: int = 0) -> None:
     """Shared tail of both graphs: loaders are added by the callers; this wires
     the official template's custom sampling stack + AV decode + mp4 mux.
-    Includes Sol-Attn sparse attention optimization (kijai/Triton) for ~3.9× speedup.
+    The attention backend (Sol-Attn by default) is picked by _attention_node.
 
     With ``distill_lora`` set: the distill LoRA (PDD or LightX2V turbo) is
     applied right after the UNet loader and sampling drops to
     ``distill_steps`` plain Euler on the
     ``simple`` schedule — the uniform-grid contract the LoRAs were distilled
     on. Model chain mirrors the official LightX2V workflows:
-    UNETLoader -> [LoraLoaderModelOnly] -> MiniMaxH3SigmaShift -> SolAttn."""
+    UNETLoader -> [LoraLoaderModelOnly] -> MiniMaxH3SigmaShift -> [attention]."""
     model_src = "1"
     if distill_lora:
         wf["49"] = {
@@ -479,27 +588,7 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
         "inputs": {"model": [model_src, 0],
                    "shift_video": shift_video, "shift_audio": shift_audio},
     }
-    model_src = "51"
-    wf["50"] = {
-        "class_type": "SolAttnPatch",
-        "inputs": {
-            "model": [model_src, 0],
-            "tau": 1.5,
-            "start_percent": 0.1,
-            "end_percent": 0.95,
-            "min_tokens": 4096,
-            "int8_qk": True,
-            # Required since the 2026-08-08 V3-schema rework of the node:
-            # INT8 P@V alongside INT8 QK ("the other half of the int8 win").
-            "int8_pv": True,
-            "sink_conditioning": "exact_kv_and_rows",
-            "morton": True,
-            "morton_curve": "2d_frame",
-            "verbose": False,
-            "use_tma": False,
-            "dense_blocks": "0-2,-1",
-        },
-    }
+    model_src = _attention_node(wf, "51")
     wf["6"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}}
     wf["7"] = {
         "class_type": "KSamplerSelect",
@@ -507,13 +596,13 @@ def _sampling_stack(wf: dict, cond_node: str, latent_node_slot: tuple, seed: int
     }
     wf["8"] = {
         "class_type": "BasicScheduler",
-        "inputs": {"model": ["50", 0], "scheduler": "simple",
+        "inputs": {"model": [model_src, 0], "scheduler": "simple",
                    "steps": _adv("pdd_steps", distill_steps) if distill_lora else _adv("steps", STEPS),
                    "denoise": 1.0},
     }
     wf["9"] = {
         "class_type": "BasicGuider",
-        "inputs": {"model": ["50", 0], "conditioning": [cond_node, 0]},
+        "inputs": {"model": [model_src, 0], "conditioning": [cond_node, 0]},
     }
     wf["12"] = {
         "class_type": "SamplerCustomAdvanced",
@@ -717,6 +806,13 @@ class Inference:
                     f"{flag}=1 but loras/{lora} is missing from the models "
                     "volume — run `modal run download.py::download` first"
                 )
+        if ATTN == "vsa" and not os.path.isfile(
+            os.path.join(COMFY_MODELS, "loras", VSA_GATE)
+        ):
+            raise RuntimeError(
+                f"H3_ATTN=vsa but loras/{VSA_GATE} is missing from the models "
+                "volume — run `H3_VSA=1 modal run download.py::download` first"
+            )
         self._logfh = open(COMFY_LOG, "wb")
         self.proc = subprocess.Popen(
             [
@@ -762,6 +858,7 @@ class Inference:
             + " turbo_ref="
             + (f"on/{TURBO_REF_STEPS}step" if TURBO_REF else "off")
             + f" pdd={'on/' + str(PDD_STEPS) + 'step' if PDD else 'off'}"
+            + f" attn={ATTN}"
             + ") — weights load lazily on the first graph",
             flush=True,
         )
@@ -817,7 +914,8 @@ class Inference:
         a = _accel(fl2va=True)
         print(f"[h3-timing] request fl2va {w}x{h} {frames}f "
               f"steps={a['distill_steps'] or STEPS} "
-              f"lora={a['distill_lora'] or 'none'}", flush=True)
+              f"lora={a['distill_lora'] or 'none'} attn={_adv('attn', ATTN)}",
+              flush=True)
         first_fn = self._write_input("first.png", first) if first else None
         last_fn = self._write_input("last.png", last) if last else None
         wf = _fl2va_graph((text or "").strip(), w, h, frames, _seed(seed),
@@ -830,7 +928,7 @@ class Inference:
         a = _accel(fl2va=False)
         print(f"[h3-timing] request ref2va {w}x{h} {frames}f "
               f"steps={a['distill_steps'] or STEPS} "
-              f"lora={a['distill_lora'] or 'none'} "
+              f"lora={a['distill_lora'] or 'none'} attn={_adv('attn', ATTN)} "
               f"refs={len(images)}i/{len(videos)}v/{len(audios)}a", flush=True)
         image_files = [
             self._write_input(f"ref_img_{i}.png", b) for i, b in enumerate(images)
