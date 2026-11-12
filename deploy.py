@@ -375,7 +375,7 @@ image = (
         f"git -C {COMFY}/custom_nodes/ComfyUI-Ref2VA-VSA "
         f"checkout {REF2VA_VSA_COMMIT}",
     )
-    .pip_install("tongflow==0.3.3", "fastapi[standard]")
+    .pip_install("tongflow==1.0.0", "fastapi[standard]")
     # Modal re-imports this module inside the container, so every module-level
     # os.environ.get() above reads the *container's* environment rather than
     # the shell that ran `modal deploy`. Without baking them in, each H3_* knob
